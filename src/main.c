@@ -263,10 +263,13 @@ int main(int argc, char **argv)
     polling_loop();
 
     /* ── Cleanup ─────────────────────────────────────────────────────────── */
+    /* Order matters: shutdown Tokio first so no more callbacks can fire,
+       then drain the response queue and join the sender thread. */
+    meteo_shutdown(g_meteo);
+
     responder_shutdown();
 
     telebot_destroy(g_handle);
-    meteo_shutdown(g_meteo);
     apr_pool_destroy(g_pool);
 
     printf("👋  Bot stopped.\n");

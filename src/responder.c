@@ -91,10 +91,12 @@ int responder_init(apr_pool_t *pool, telebot_handler_t handle)
 
 void responder_shutdown(void)
 {
-    apr_queue_term(g_queue);
-    apr_thread_join(NULL, g_thread);
+    apr_status_t thread_retval = APR_SUCCESS;
 
-    /* Queue is freed with the pool — just clear the pointers */
+    apr_queue_term(g_queue);
+    apr_thread_join(&thread_retval, g_thread);
+
+    /* Pool is dedicated to the responder — safe to destroy here */
     apr_pool_destroy(g_pool);
     g_pool = NULL;
     g_queue = NULL;
