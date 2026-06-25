@@ -43,15 +43,15 @@ endif()
 # ── rust-lib (custom cargo build) ────────────────────────────────────────────
 
 set(RUST_LIB_DIR  "${CMAKE_SOURCE_DIR}/rust-lib")
-set(RUST_LIB_SO   "${RUST_LIB_DIR}/target/debug/librust_telegram_bot.so")
+set(RUST_LIB_A    "${RUST_LIB_DIR}/target/debug/libmeteo.a")
 
 add_custom_command(
-    OUTPUT  "${RUST_LIB_SO}"
+    OUTPUT  "${RUST_LIB_A}"
     COMMAND cargo build
     WORKING_DIRECTORY "${RUST_LIB_DIR}"
     COMMENT "Building rust-lib with Cargo..."
 )
-add_custom_target(rust_lib_target DEPENDS "${RUST_LIB_SO}")
+add_custom_target(rust_lib_target DEPENDS "${RUST_LIB_A}")
 
 # ── Main executable ──────────────────────────────────────────────────────────
 
@@ -71,11 +71,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${APR_LIBRARIES}
     telebot
-    "${RUST_LIB_SO}"
+    "${RUST_LIB_A}"
+    # Transitive deps of the Rust static library
+    ssl crypto pthread dl m
 )
 
-# Pass the paths to the .so files so the binary can find them at runtime
+# Pass rpath so telebot .so can be found at runtime
 target_link_options(${PROJECT_NAME} PRIVATE
-    "-Wl,-rpath,${RUST_LIB_DIR}/target/debug"
     "-Wl,-rpath,${telebot_BINARY_DIR}"
 )

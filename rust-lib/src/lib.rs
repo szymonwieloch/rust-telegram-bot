@@ -4,7 +4,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use rust_telegram_bot::{get_current_weather, Location};
+//! use meteo::{get_current_weather, Location};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -243,7 +243,7 @@ impl From<Box<dyn std::error::Error>> for WeatherError {
 /// # Example
 ///
 /// ```rust,no_run
-/// use rust_telegram_bot::{get_current_weather, Location};
+/// use meteo::{get_current_weather, Location};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {

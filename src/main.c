@@ -18,7 +18,7 @@
 
 #include <telebot.h>
 
-#include "rust_telegram_bot.h"
+#include "meteo.h"
 
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 

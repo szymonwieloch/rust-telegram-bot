@@ -1,11 +1,11 @@
 [package]
-name = "rust-telegram-bot"
+name = "meteo"
 version = "0.1.0"
 edition = "2021"
 description = "A Rust library for fetching current weather information using the Open-Meteo API"
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "staticlib"]
 
 [dependencies]
 open-meteo-api = "0.1.4"

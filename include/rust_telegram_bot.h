@@ -1,5 +1,5 @@
-#ifndef RUST_TELEGRAM_BOT_H
-#define RUST_TELEGRAM_BOT_H
+#ifndef METEO_H
+#define METEO_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,4 +37,4 @@ void meteo_free(CWeatherInfo *wi);
 }
 #endif
 
-#endif /* RUST_TELEGRAM_BOT_H */
+#endif /* METEO_H */
