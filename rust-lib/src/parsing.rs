@@ -34,18 +34,12 @@ pub fn parse_location(input: &str) -> Result<Location, String> {
 
     // Case 1: letters, spaces, hyphens, apostrophes → city name
     if is_alphabetic(trimmed) {
-        return Ok(Location::City {
-            name: trimmed.to_string(),
-            api_key: String::new(),
-        });
+        return Ok(Location::City { name: trimmed.to_string(), api_key: String::new() });
     }
 
     // Case 2: try parsing as "latitude,longitude"
     if let Ok(coords) = parse_coordinates(trimmed) {
-        return Ok(Location::Coordinates {
-            latitude: coords.0,
-            longitude: coords.1,
-        });
+        return Ok(Location::Coordinates { latitude: coords.0, longitude: coords.1 });
     }
 
     // Case 3: everything else is invalid
@@ -79,15 +73,11 @@ fn parse_coordinates(input: &str) -> Result<(f32, f32), String> {
         ));
     }
 
-    let lat: f32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid latitude '{}': {}", parts[0], e))?;
+    let lat: f32 =
+        parts[0].trim().parse().map_err(|e| format!("invalid latitude '{}': {}", parts[0], e))?;
 
-    let lon: f32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid longitude '{}': {}", parts[1], e))?;
+    let lon: f32 =
+        parts[1].trim().parse().map_err(|e| format!("invalid longitude '{}': {}", parts[1], e))?;
 
     if !(-90.0..=90.0).contains(&lat) {
         return Err(format!("latitude {} out of range [-90, 90]", lat));

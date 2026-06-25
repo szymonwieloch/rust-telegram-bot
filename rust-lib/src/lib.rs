@@ -48,10 +48,7 @@ impl MeteoContext {
     pub fn new(geokey: String) -> Result<Self, String> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| format!("failed to create tokio runtime: {}", e))?;
-        Ok(Self {
-            geocoding_api_key: geokey,
-            runtime,
-        })
+        Ok(Self { geocoding_api_key: geokey, runtime })
     }
 
     /// The stored geocoding API key (may be empty).
@@ -82,10 +79,7 @@ pub enum Location {
     /// Latitude and longitude coordinates.
     Coordinates { latitude: f32, longitude: f32 },
     /// A city/place name (requires a free geocoding API key from <https://geocode.maps.co/>).
-    City {
-        name: String,
-        api_key: String,
-    },
+    City { name: String, api_key: String },
 }
 
 /// A human-readable description of a WMO weather code.
@@ -325,9 +319,9 @@ fn build_query(location: &Location) -> Result<OpenMeteo, WeatherError> {
     let builder = OpenMeteo::new();
 
     match location {
-        Location::Coordinates { latitude, longitude } => builder
-            .coordinates(*latitude, *longitude)
-            .map_err(WeatherError::QueryBuildError),
+        Location::Coordinates { latitude, longitude } => {
+            builder.coordinates(*latitude, *longitude).map_err(WeatherError::QueryBuildError)
+        }
 
         Location::City { name: _name, api_key: _api_key } => {
             // Note: `location()` is async because it geocodes the name first.
@@ -389,33 +383,18 @@ mod tests {
     #[test]
     fn test_weather_condition_from_code() {
         assert_eq!(WeatherCondition::from_code(0.0), WeatherCondition::ClearSky);
-        assert_eq!(
-            WeatherCondition::from_code(1.0),
-            WeatherCondition::MainlyClear
-        );
-        assert_eq!(
-            WeatherCondition::from_code(2.0),
-            WeatherCondition::PartlyCloudy
-        );
+        assert_eq!(WeatherCondition::from_code(1.0), WeatherCondition::MainlyClear);
+        assert_eq!(WeatherCondition::from_code(2.0), WeatherCondition::PartlyCloudy);
         assert_eq!(WeatherCondition::from_code(3.0), WeatherCondition::Overcast);
         assert_eq!(WeatherCondition::from_code(61.0), WeatherCondition::RainSlight);
-        assert_eq!(
-            WeatherCondition::from_code(95.0),
-            WeatherCondition::Thunderstorm
-        );
-        assert!(matches!(
-            WeatherCondition::from_code(999.0),
-            WeatherCondition::Unknown(999.0)
-        ));
+        assert_eq!(WeatherCondition::from_code(95.0), WeatherCondition::Thunderstorm);
+        assert!(matches!(WeatherCondition::from_code(999.0), WeatherCondition::Unknown(999.0)));
     }
 
     #[test]
     fn test_weather_condition_display() {
         assert_eq!(WeatherCondition::ClearSky.to_string(), "Clear sky");
         assert_eq!(WeatherCondition::RainHeavy.to_string(), "Heavy rain");
-        assert_eq!(
-            WeatherCondition::Unknown(42.0).to_string(),
-            "Unknown (code: 42)"
-        );
+        assert_eq!(WeatherCondition::Unknown(42.0).to_string(), "Unknown (code: 42)");
     }
 }

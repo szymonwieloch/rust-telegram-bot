@@ -15,7 +15,7 @@
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 
-use crate::{MeteoContext, parsing::parse_location, Location};
+use crate::{parsing::parse_location, Location, MeteoContext};
 
 /// C-compatible weather result.
 ///
@@ -159,10 +159,9 @@ pub extern "C" fn meteo_get(
     let _guard = ctx.runtime().enter();
     tokio::spawn(async move {
         let wi = match crate::get_weather(&loc).await {
-            Ok(weather) => CWeatherInfo {
-                message: into_c_str(&weather.to_string()),
-                err: ptr::null(),
-            },
+            Ok(weather) => {
+                CWeatherInfo { message: into_c_str(&weather.to_string()), err: ptr::null() }
+            }
             Err(e) => CWeatherInfo {
                 message: into_c_str("Failed to fetch weather data"),
                 err: into_c_str(&e.to_string()),

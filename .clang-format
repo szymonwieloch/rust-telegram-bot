@@ -1,7 +1,7 @@
 # clang-format configuration for telegram-weather-bot
 # Based on the existing code style in the project.
 
-Language:        C
+Language:        Cpp
 BasedOnStyle:    LLVM
 IndentWidth:     4
 TabWidth:        4
