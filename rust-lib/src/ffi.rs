@@ -58,8 +58,7 @@ pub unsafe extern "C" fn meteo_init(geokey: *const c_char) -> *mut MeteoContext 
         match CStr::from_ptr(geokey).to_str() {
             Ok(s) => s.to_string(),
             Err(_) => {
-                // Non-UTF-8 key → treat as if none was provided.
-                String::new()
+                return ptr::null_mut();
             }
         }
     };
@@ -93,27 +92,7 @@ pub unsafe extern "C" fn meteo_get(
     callback: CWeatherCallback,
     user_context: *mut c_void,
 ) {
-    // ── Fast-path: null / invalid arguments → synchronous callback ──────
-    if ctx.is_null() {
-        callback(
-            user_context,
-            CWeatherInfo {
-                message: into_c_str("Internal error: no context"),
-                err: into_c_str("meteo context pointer is null; call meteo_init() first"),
-            },
-        );
-        return;
-    }
-    if location.is_null() {
-        callback(
-            user_context,
-            CWeatherInfo {
-                message: into_c_str("Internal error: invalid location"),
-                err: into_c_str("location pointer is null"),
-            },
-        );
-        return;
-    }
+    assert!(!ctx.is_null() && !location.is_null());
 
     let ctx = &*ctx;
 
@@ -217,9 +196,11 @@ pub unsafe extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
     // allocated CString payloads need to be freed here.
     if !wi.message.is_null() {
         let _ = CString::from_raw(wi.message as *mut c_char);
+        wi.message = ptr::null();
     }
     if !wi.err.is_null() {
         let _ = CString::from_raw(wi.err as *mut c_char);
+        wi.err = ptr::null();
     }
 }
 
