@@ -6,9 +6,15 @@ extern "C" {
 #endif
 
 /**
- * Opaque weather-info struct returned by meteo_get().
- * On success, `message` points to a human-readable weather string and `err` is NULL.
- * On failure, `message` is NULL and `err` points to an error description.
+ * Weather-info struct returned by meteo_get().
+ *
+ * Field semantics:
+ * - `message`: Always set. Contains the formatted weather string on success,
+ *   or a **user-friendly** error description on failure (suitable for
+ *   displaying to an end user).
+ * - `err`: Internal error details for logging. NULL on success; on failure,
+ *   contains technical diagnostic information intended for the developer's
+ *   logs, not for end users.
  *
  * Must be freed with meteo_free().
  */

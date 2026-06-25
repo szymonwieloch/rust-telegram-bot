@@ -58,15 +58,14 @@ static void handle_weather(const telebot_message_t *msg, const char *arg) {
     /* Call rust-lib via its C FFI */
     CWeatherInfo wi = meteo_get(arg);
 
-    const char *reply;
+    /* Log internal error details if present */
     if (wi.err) {
-        /* Allocate a formatted error string from the APR pool */
-        char *buf = apr_palloc(g_pool, strlen(wi.err) + 64);
-        sprintf(buf, "❌  Error fetching weather:\n\n%s", wi.err);
-        reply = buf;
-    } else {
-        reply = wi.message;
+        fprintf(stderr, "[weather-bot] internal error: %s\n", wi.err);
     }
+
+    /* message is always set — weather string on success, user-friendly
+       error description on failure */
+    const char *reply = wi.message;
 
     telebot_send_message(g_handle, msg->chat->id, reply,
                          NULL, false, false, 0, NULL);

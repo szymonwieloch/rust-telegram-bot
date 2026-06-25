@@ -4,8 +4,10 @@
 //!
 //! ```c
 //! struct WeatherInfo {
-//!     const char *message;  // weather string on success, NULL on error
-//!     const char *err;      // NULL on success, error description on failure
+//!     const char *message;  // user-facing message (weather string on success,
+//!                           // user-friendly error description on failure)
+//!     const char *err;      // NULL on success, internal error details on failure
+//!                           // (intended for logging, not shown to end users)
 //! };
 //!
 //! WeatherInfo meteo_get(const char *location);
@@ -15,12 +17,18 @@
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
-use crate::{get_current_weather, Location};
+use crate::{get_weather, parsing::parse_location, Location};
 
 /// C-compatible weather result.
 ///
-/// On success, `message` points to a formatted weather string and `err` is null.
-/// On failure, `message` is null and `err` points to an error description.
+/// # Field semantics
+///
+/// - `message`: Always set. On success, contains the formatted weather string.
+///   On failure, contains a **user-friendly** error description suitable for
+///   displaying to an end user.
+/// - `err`: Internal error details for logging. `NULL` on success; on failure,
+///   contains technical diagnostic information (e.g. the underlying API error,
+///   parse failure details) intended for the developer's logs.
 #[repr(C)]
 pub struct CWeatherInfo {
     pub message: *const c_char,
@@ -43,7 +51,7 @@ pub extern "C" fn meteo_get(location: *const c_char) -> CWeatherInfo {
     // Guard against null pointer
     if location.is_null() {
         return CWeatherInfo {
-            message: ptr::null(),
+            message: into_c_str("Internal error: invalid location"),
             err: into_c_str("location pointer is null"),
         };
     }
@@ -53,46 +61,51 @@ pub extern "C" fn meteo_get(location: *const c_char) -> CWeatherInfo {
         Ok(s) => s,
         Err(e) => {
             return CWeatherInfo {
-                message: ptr::null(),
+                message: into_c_str("Invalid location format"),
                 err: into_c_str(&format!("invalid UTF-8 in location string: {}", e)),
             };
         }
     };
 
-    // Parse "latitude,longitude" format
-    let (lat, lon) = match parse_coordinates(loc_str) {
-        Ok(coords) => coords,
+    let location = match parse_location(loc_str) {
+        Ok(loc) => loc,
         Err(e) => {
             return CWeatherInfo {
-                message: ptr::null(),
+                message: into_c_str("Invalid location format"),
                 err: into_c_str(&e),
             };
         }
     };
 
-    let location = Location::Coordinates {
-        latitude: lat,
-        longitude: lon,
-    };
+    // City lookups require a geocoding API key.
+    // If one wasn't provided, return a clear error.
+    if let Location::City { api_key, .. } = &location {
+        if api_key.is_empty() {
+            return CWeatherInfo {
+                message: into_c_str("City name lookups require a geocoding API key. Use coordinates instead (e.g. 51.5074,-0.1278)."),
+                err: into_c_str("missing geocoding API key for city lookup"),
+            };
+        }
+    }
 
     // Create a Tokio runtime and block on the async call
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
             return CWeatherInfo {
-                message: ptr::null(),
+                message: into_c_str("Internal error"),
                 err: into_c_str(&format!("failed to create async runtime: {}", e)),
             };
         }
     };
 
-    match rt.block_on(get_current_weather(&location)) {
+    match rt.block_on(get_weather(&location)) {
         Ok(weather) => CWeatherInfo {
             message: into_c_str(&weather.to_string()),
             err: ptr::null(),
         },
         Err(e) => CWeatherInfo {
-            message: ptr::null(),
+            message: into_c_str("Failed to fetch weather data"),
             err: into_c_str(&e.to_string()),
         },
     }
@@ -127,36 +140,6 @@ pub extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
         // We only need to free the inner strings — the struct itself
         // is managed by the caller.
     }
-}
-
-/// Parse a "latitude,longitude" string into (f32, f32).
-fn parse_coordinates(input: &str) -> Result<(f32, f32), String> {
-    let parts: Vec<&str> = input.split(',').collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "expected location in 'latitude,longitude' format, got: '{}'",
-            input
-        ));
-    }
-
-    let lat: f32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid latitude '{}': {}", parts[0], e))?;
-
-    let lon: f32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid longitude '{}': {}", parts[1], e))?;
-
-    if !(-90.0..=90.0).contains(&lat) {
-        return Err(format!("latitude {} out of range [-90, 90]", lat));
-    }
-    if !(-180.0..=180.0).contains(&lon) {
-        return Err(format!("longitude {} out of range [-180, 180]", lon));
-    }
-
-    Ok((lat, lon))
 }
 
 /// Convert a Rust string into an owned `*const c_char` suitable for FFI.

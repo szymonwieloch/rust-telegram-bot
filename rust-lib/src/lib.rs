@@ -19,6 +19,7 @@
 //! ```
 
 pub mod ffi;
+pub mod parsing;
 
 use open_meteo_api::{
     models::{CurrentWeather, OpenMeteoData},
