@@ -56,6 +56,7 @@ corrosion_import_crate(
 add_executable(${PROJECT_NAME}
     src/main.c
     src/responder.c
+    src/queue.c
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -80,3 +81,24 @@ set_property(TARGET meteo APPEND PROPERTY
 target_link_options(${PROJECT_NAME} PRIVATE
     "-Wl,-rpath,${telebot_BINARY_DIR}"
 )
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+
+enable_testing()
+
+add_executable(test_queue
+    test/test_queue.c
+    src/queue.c
+)
+
+target_include_directories(test_queue PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    ${APR_INCLUDE_DIRS}
+)
+
+target_link_libraries(test_queue PRIVATE
+    ${APR_LIBRARIES}
+    pthread
+)
+
+add_test(NAME queue COMMAND test_queue)
