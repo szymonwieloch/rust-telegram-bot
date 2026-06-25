@@ -14,6 +14,7 @@
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
+use std::time::Duration;
 
 use crate::{parsing::parse_location, Location, MeteoContext};
 
@@ -158,13 +159,19 @@ pub unsafe extern "C" fn meteo_get(
     let user_ptr = user_context as usize;
     let _guard = ctx.runtime().enter();
     tokio::spawn(async move {
-        let wi = match crate::get_weather(&loc).await {
-            Ok(weather) => {
-                CWeatherInfo { message: into_c_str(&weather.to_string()), err: ptr::null() }
-            }
-            Err(e) => CWeatherInfo {
+        let wi = match tokio::time::timeout(Duration::from_secs(30), crate::get_weather(&loc)).await
+        {
+            Ok(Ok(weather)) => CWeatherInfo {
+                message: into_c_str(&weather.to_string()),
+                err: ptr::null(),
+            },
+            Ok(Err(e)) => CWeatherInfo {
                 message: into_c_str("Failed to fetch weather data"),
                 err: into_c_str(&e.to_string()),
+            },
+            Err(_elapsed) => CWeatherInfo {
+                message: into_c_str("Weather request timed out"),
+                err: into_c_str("request to Open-Meteo API timed out after 30 seconds"),
             },
         };
         callback(user_ptr as *mut c_void, wi);
@@ -209,19 +216,15 @@ pub unsafe extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
 
     let wi = &mut *wi;
 
-    // Free the C strings if they were allocated
+    // Free the inner C strings.  The CWeatherInfo struct itself is
+    // passed by value on the caller's stack, so only the two heap-
+    // allocated CString payloads need to be freed here.
     if !wi.message.is_null() {
         let _ = CString::from_raw(wi.message as *mut c_char);
     }
     if !wi.err.is_null() {
         let _ = CString::from_raw(wi.err as *mut c_char);
     }
-
-    // Convert back to Box to free the struct itself
-    // Note: we can't drop through Box here since the struct was
-    // returned by value. The caller allocates it on their stack.
-    // We only need to free the inner strings — the struct itself
-    // is managed by the caller.
 }
 
 /// Convert a Rust string into an owned `*const c_char` suitable for FFI.

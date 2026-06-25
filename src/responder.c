@@ -69,16 +69,23 @@ static void *APR_THREAD_FUNC sender_thread_func(apr_thread_t *thd, void *arg)
 
 int responder_init(apr_pool_t *pool, telebot_handler_t handle)
 {
+    apr_queue_t *queue = NULL;
+    apr_thread_t *thread = NULL;
+
+    if (apr_queue_create(&queue, 256, pool) != APR_SUCCESS) {
+        return -1;
+    }
+
+    if (apr_thread_create(&thread, NULL, sender_thread_func, NULL, pool) != APR_SUCCESS) {
+        apr_queue_term(queue);
+        return -1;
+    }
+
+    /* All steps succeeded — commit to globals */
     g_pool = pool;
+    g_queue = queue;
+    g_thread = thread;
     g_handle = handle;
-
-    if (apr_queue_create(&g_queue, 256, pool) != APR_SUCCESS) {
-        return -1;
-    }
-
-    if (apr_thread_create(&g_thread, NULL, sender_thread_func, NULL, pool) != APR_SUCCESS) {
-        return -1;
-    }
     return 0;
 }
 
@@ -87,10 +94,11 @@ void responder_shutdown(void)
     apr_queue_term(g_queue);
     apr_thread_join(NULL, g_thread);
 
-    /* Queue is freed with the pool — just clear the pointer */
+    /* Queue is freed with the pool — just clear the pointers */
     apr_pool_destroy(g_pool);
     g_pool = NULL;
     g_queue = NULL;
+    g_thread = NULL;
 }
 
 void responder_weather_callback(void *user_context, CWeatherInfo wi)
@@ -103,18 +111,25 @@ void responder_weather_callback(void *user_context, CWeatherInfo wi)
     }
 
     response_msg_t *msg = malloc(sizeof(*msg));
+    if (!msg) {
+        fprintf(stderr, "[weather-bot] malloc response_msg failed\n");
+        meteo_free(&wi);
+        return;
+    }
     msg->chat_id = chat_id;
     msg->text = strdup(wi.message);
     if (!msg->text) {
         fprintf(stderr, "[weather-bot] strdup failed\n");
         free(msg);
-    } else {
-        apr_status_t st = apr_queue_push(g_queue, msg);
-        if (st != APR_SUCCESS) {
-            fprintf(stderr, "[weather-bot] queue push failed: %d\n", st);
-            free(msg->text);
-            free(msg);
-        }
+        meteo_free(&wi);
+        return;
+    }
+
+    apr_status_t st = apr_queue_push(g_queue, msg);
+    if (st != APR_SUCCESS) {
+        fprintf(stderr, "[weather-bot] queue push failed: %d\n", st);
+        free(msg->text);
+        free(msg);
     }
 
     meteo_free(&wi);

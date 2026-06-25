@@ -89,6 +89,14 @@ target_link_options(${PROJECT_NAME} PRIVATE
 
 enable_testing()
 
+# Rust crate tests (run via cargo test)
+add_test(
+    NAME rust_tests
+    COMMAND cargo test --manifest-path "${CMAKE_SOURCE_DIR}/rust-lib/Cargo.toml"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+# C utility tests
 add_executable(test_utils
     test/abts.c
     test/testutil.c

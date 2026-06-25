@@ -238,52 +238,24 @@ impl fmt::Display for WeatherInfo {
     }
 }
 
-/// Private, always-`Send + Sync` error type for string messages.
-#[derive(Debug)]
-struct StrError(String);
-
-impl fmt::Display for StrError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for StrError {}
-
 /// A `Send + Sync` wrapper for boxed errors originating from async I/O.
 ///
-/// Unlike a plain `Box<dyn Error>` this is guaranteed to be `Send + Sync`
-/// at the type level, so [`WeatherError`] can cross `.await` points and be
-/// spawned into Tokio tasks without `unsafe`.
+/// All concrete error types stored here come from `reqwest`, `serde_json`,
+/// and `open-meteo-api`, which are known to be `Send + Sync`.  The `unsafe`
+/// impl is confined to this single type rather than spread across the whole
+/// [`WeatherError`] enum.
+///
+/// To prevent accidental construction from non-`Send + Sync` errors, prefer
+/// using `String::from(msg).into()` for ad-hoc messages and let the `From<E>`
+/// blanket impl handle concrete types that already satisfy the bounds.
 #[derive(Debug)]
-pub struct BoxedError(Box<dyn std::error::Error + Send + Sync>);
+pub struct BoxedError(Box<dyn std::error::Error>);
 
-impl BoxedError {
-    /// Construct a `BoxedError` from a plain string message (always `Send + Sync`).
-    pub(crate) fn msg(s: impl Into<String>) -> Self {
-        Self(Box::new(StrError(s.into())))
-    }
-
-    /// Convert a `Box<dyn Error>` into a `BoxedError`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure the concrete error type inside the box is
-    /// `Send + Sync`.  Every error source used in this crate (`reqwest`,
-    /// `serde_json`, `open-meteo-api`) satisfies this, so all internal
-    /// call-sites are sound.  This method is `pub(crate)` to prevent
-    /// external callers from accidentally violating the invariant.
-    pub(crate) unsafe fn from_box_unchecked(e: Box<dyn std::error::Error>) -> Self {
-        // SAFETY: `Box<dyn Error>` and `Box<dyn Error + Send + Sync>` share
-        // the same layout (data ptr + vtable ptr).  The caller guarantees the
-        // concrete error type satisfies `Send + Sync`, so the vtable for the
-        // widened trait object is compatible at runtime.
-        Self(std::mem::transmute::<
-            Box<dyn std::error::Error>,
-            Box<dyn std::error::Error + Send + Sync>,
-        >(e))
-    }
-}
+// SAFETY: BoxedError is only constructed from error types that originate from
+// reqwest, serde_json, and open-meteo-api, all of which are Send + Sync.
+// String-based messages are also Send + Sync.
+unsafe impl Send for BoxedError {}
+unsafe impl Sync for BoxedError {}
 
 impl fmt::Display for BoxedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -294,6 +266,12 @@ impl fmt::Display for BoxedError {
 impl std::error::Error for BoxedError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.0.source()
+    }
+}
+
+impl From<Box<dyn std::error::Error>> for BoxedError {
+    fn from(e: Box<dyn std::error::Error>) -> Self {
+        Self(e)
     }
 }
 
@@ -330,15 +308,17 @@ impl std::error::Error for WeatherError {
     }
 }
 
-impl From<Box<dyn std::error::Error + Send + Sync>> for WeatherError {
-    fn from(e: Box<dyn std::error::Error + Send + Sync>) -> Self {
+impl From<Box<dyn std::error::Error>> for WeatherError {
+    fn from(e: Box<dyn std::error::Error>) -> Self {
         Self::ApiError(BoxedError(e))
     }
 }
 
 /// Fetch the current weather for a given [`Location`].
 ///
-/// Only handles [`Location::Coordinates`]; for city names use [`get_weather`].
+/// Only accepts [`Location::Coordinates`]; passing a [`Location::City`]
+/// returns a [`WeatherError::QueryBuildError`].  Use [`get_weather`] for
+/// city-name lookups.
 ///
 /// # Errors
 ///
@@ -348,22 +328,22 @@ pub async fn get_current_weather(location: &Location) -> Result<WeatherInfo, Wea
     let (lat, lon) = match location {
         Location::Coordinates { latitude, longitude } => (*latitude, *longitude),
         Location::City { .. } => {
-            return Err(WeatherError::QueryBuildError(BoxedError::msg(
+            return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
                 "get_current_weather does not support city names; use get_weather()",
-            )));
+            ))));
         }
     };
 
     let query = OpenMeteo::new()
         .coordinates(lat, lon)
-        .map_err(|e| WeatherError::QueryBuildError(unsafe { BoxedError::from_box_unchecked(e) }))?
+        .map_err(|e| WeatherError::QueryBuildError(e.into()))?
         .current_weather()
-        .map_err(|e| WeatherError::QueryBuildError(unsafe { BoxedError::from_box_unchecked(e) }))?;
+        .map_err(|e| WeatherError::QueryBuildError(e.into()))?;
 
     let data: OpenMeteoData = query
         .query()
         .await
-        .map_err(|e| WeatherError::ApiError(unsafe { BoxedError::from_box_unchecked(e) }))?;
+        .map_err(|e| WeatherError::ApiError(e.into()))?;
 
     WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
 }
@@ -382,25 +362,21 @@ pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherErro
         Location::Coordinates { .. } => get_current_weather(location).await,
         Location::City { name, api_key } => {
             if api_key.is_empty() {
-                return Err(WeatherError::QueryBuildError(BoxedError::msg(
+                return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
                     "City name lookups require a geocoding API key. \
                      Call meteo_init() first or use coordinates.",
-                )));
+                ))));
             }
 
             let data: OpenMeteoData = OpenMeteo::new()
                 .location(name, api_key)
                 .await
-                .map_err(|e| WeatherError::ApiError(unsafe { BoxedError::from_box_unchecked(e) }))?
+                .map_err(|e| WeatherError::ApiError(e.into()))?
                 .current_weather()
-                .map_err(|e| {
-                    WeatherError::QueryBuildError(unsafe { BoxedError::from_box_unchecked(e) })
-                })?
+                .map_err(|e| WeatherError::QueryBuildError(e.into()))?
                 .query()
                 .await
-                .map_err(|e| {
-                    WeatherError::ApiError(unsafe { BoxedError::from_box_unchecked(e) })
-                })?;
+                .map_err(|e| WeatherError::ApiError(e.into()))?;
 
             WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
         }
