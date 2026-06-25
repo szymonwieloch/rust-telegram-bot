@@ -81,13 +81,17 @@ jobs:
       - name: Install cppcheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cppcheck
+          sudo apt-get install -y --no-install-recommends \
+            cppcheck \
+            libapr1-dev \
+            libaprutil1-dev
 
       - name: Run cppcheck
         run: |
           cppcheck --enable=all --inconclusive --error-exitcode=1 \
             --suppress=missingIncludeSystem \
             --suppress=unmatchedSuppression \
+            --suppress='*:test/abts.c' \
             -I include \
             -I src \
             src/ test/

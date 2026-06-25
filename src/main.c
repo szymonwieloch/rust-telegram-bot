@@ -92,7 +92,7 @@ static void polling_loop(void) {
     int offset = 0, limit = 10, timeout = 1;
     telebot_error_e ret;
     telebot_update_t *updates = NULL;
-    int count = 0;
+    int count;
 
     /* Only poll for message-type updates */
     telebot_update_type_e allowed[] = { TELEBOT_UPDATE_TYPE_MESSAGE };

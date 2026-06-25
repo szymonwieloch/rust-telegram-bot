@@ -22,7 +22,7 @@ static char *copystr(abts_case *tc, const char *src) {
 static void test_trim_no_whitespace(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "hello");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "hello", result);
     free(s);
 }
@@ -30,7 +30,7 @@ static void test_trim_no_whitespace(abts_case *tc, void *data) {
 static void test_trim_leading_spaces(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "   hello");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "hello", result);
     /* result points inside the original buffer */
     ABTS_TRUE(tc, result >= s);
@@ -40,7 +40,7 @@ static void test_trim_leading_spaces(abts_case *tc, void *data) {
 static void test_trim_trailing_spaces(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "hello   ");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "hello", result);
     free(s);
 }
@@ -48,7 +48,7 @@ static void test_trim_trailing_spaces(abts_case *tc, void *data) {
 static void test_trim_both_sides(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "  hello world  ");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "hello world", result);
     free(s);
 }
@@ -56,7 +56,7 @@ static void test_trim_both_sides(abts_case *tc, void *data) {
 static void test_trim_tabs_and_newlines(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "\t\n  text \n\t");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "text", result);
     free(s);
 }
@@ -64,7 +64,7 @@ static void test_trim_tabs_and_newlines(abts_case *tc, void *data) {
 static void test_trim_all_whitespace(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "    \t  \n  ");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "", result);
     /* result should point to the start (set to empty) */
     ABTS_TRUE(tc, result == s);
@@ -74,21 +74,21 @@ static void test_trim_all_whitespace(abts_case *tc, void *data) {
 static void test_trim_empty_string(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "", result);
     free(s);
 }
 
 static void test_trim_null(abts_case *tc, void *data) {
     (void)data;
-    char *result = utils_trim(NULL);
+    const char *result = utils_trim(NULL);
     ABTS_PTR_EQUAL(tc, NULL, result);
 }
 
 static void test_trim_single_char(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, "x");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "x", result);
     free(s);
 }
@@ -96,7 +96,7 @@ static void test_trim_single_char(abts_case *tc, void *data) {
 static void test_trim_single_space(abts_case *tc, void *data) {
     (void)data;
     char *s = copystr(tc, " ");
-    char *result = utils_trim(s);
+    const char *result = utils_trim(s);
     ABTS_STR_EQUAL(tc, "", result);
     free(s);
 }
