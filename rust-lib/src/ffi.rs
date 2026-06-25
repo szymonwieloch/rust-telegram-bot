@@ -16,7 +16,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::time::Duration;
 
-use crate::{parsing::parse_location, Location, MeteoContext};
+use crate::{parsing::parse_location, MeteoContext};
 
 /// C-compatible weather result.
 ///
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn meteo_get(
         }
     };
 
-    let mut loc = match parse_location(&loc_str) {
+    let loc = match parse_location(&loc_str) {
         Ok(l) => l,
         Err(e) => {
             callback(
@@ -146,33 +146,30 @@ pub unsafe extern "C" fn meteo_get(
         }
     };
 
-    // If the user typed a city name, inject the API key from the context
-    if let Location::City { ref mut api_key, .. } = &mut loc {
-        if api_key.is_empty() {
-            *api_key = ctx.api_key().to_string();
-        }
-    }
-
     // ── Spawn a Tokio task (coroutine) for the actual fetch ─────────────
     // Cast to usize so the raw pointer does not appear in the async block's
     // generator state (raw pointers are !Send, usize is Send).
+    let api_key = ctx.api_key().to_string();
     let user_ptr = user_context as usize;
     let _guard = ctx.runtime().enter();
     tokio::spawn(async move {
-        let wi = match tokio::time::timeout(Duration::from_secs(30), crate::get_weather(&loc)).await
-        {
-            Ok(Ok(weather)) => {
-                CWeatherInfo { message: into_c_str(&weather.to_string()), err: ptr::null() }
-            }
-            Ok(Err(e)) => CWeatherInfo {
-                message: into_c_str("Failed to fetch weather data"),
-                err: into_c_str(&e.to_string()),
-            },
-            Err(_elapsed) => CWeatherInfo {
-                message: into_c_str("Weather request timed out"),
-                err: into_c_str("request to Open-Meteo API timed out after 30 seconds"),
-            },
-        };
+        let wi =
+            match tokio::time::timeout(Duration::from_secs(30), crate::get_weather(&loc, &api_key))
+                .await
+            {
+                Ok(Ok(data)) => CWeatherInfo {
+                    message: into_c_str(&crate::format_weather(&data)),
+                    err: ptr::null(),
+                },
+                Ok(Err(e)) => CWeatherInfo {
+                    message: into_c_str("Failed to fetch weather data"),
+                    err: into_c_str(&e.to_string()),
+                },
+                Err(_elapsed) => CWeatherInfo {
+                    message: into_c_str("Weather request timed out"),
+                    err: into_c_str("request to Open-Meteo API timed out after 30 seconds"),
+                },
+            };
         callback(user_ptr as *mut c_void, wi);
     });
 }

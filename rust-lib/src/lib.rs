@@ -12,8 +12,8 @@
 //!         latitude: 51.5074,
 //!         longitude: -0.1278,
 //!     };
-//!     let weather = get_current_weather(&location).await?;
-//!     println!("{}", weather);
+//!     let data = get_current_weather(&location).await?;
+//!     println!("{}", meteo::format_weather(&data));
 //!     Ok(())
 //! }
 //! ```
@@ -21,12 +21,9 @@
 pub mod ffi;
 pub mod parsing;
 
-use open_meteo_api::{
-    models::{CurrentWeather, OpenMeteoData},
-    query::OpenMeteo,
-};
+use open_meteo_api::{models::OpenMeteoData, query::OpenMeteo};
+use std::error::Error;
 use std::fmt;
-use std::future::Future;
 
 /// Opaque context holding the geocoding API key and Tokio async runtime.
 ///
@@ -61,12 +58,6 @@ impl MeteoContext {
         &self.runtime
     }
 
-    /// Execute an async future on this context's runtime, blocking the
-    /// current thread until completion.
-    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
-        self.runtime.block_on(future)
-    }
-
     /// Shut down the Tokio runtime and consume the context.
     pub fn shutdown(self) {
         self.runtime.shutdown_background();
@@ -78,8 +69,8 @@ impl MeteoContext {
 pub enum Location {
     /// Latitude and longitude coordinates.
     Coordinates { latitude: f32, longitude: f32 },
-    /// A city/place name (requires a free geocoding API key from <https://geocode.maps.co/>).
-    City { name: String, api_key: String },
+    /// A city/place name (e.g. "London").
+    City(String),
 }
 
 /// A human-readable description of a WMO weather code.
@@ -170,109 +161,30 @@ impl fmt::Display for WeatherCondition {
     }
 }
 
-/// Processed, easy-to-use current weather information.
-#[derive(Debug, Clone)]
-pub struct WeatherInfo {
-    /// Temperature in °C.
-    pub temperature: f32,
-    /// Wind speed in km/h.
-    pub wind_speed: f32,
-    /// Wind direction in degrees (0–360).
-    pub wind_direction: f32,
-    /// Human-readable weather condition.
-    pub condition: WeatherCondition,
-    /// Raw WMO weather code.
-    pub weather_code: f32,
-    /// Whether it is currently daytime.
-    pub is_day: bool,
-    /// Observation time (ISO 8601).
-    pub time: String,
-    /// Latitude of the location.
-    pub latitude: f32,
-    /// Longitude of the location.
-    pub longitude: f32,
-    /// Timezone name (e.g. "Europe/London").
-    pub timezone: String,
-}
-
-impl WeatherInfo {
-    /// Build a `WeatherInfo` from the raw API response.
-    fn from_open_meteo_data(data: &OpenMeteoData) -> Option<Self> {
-        let cw: &CurrentWeather = data.current_weather.as_ref()?;
-
-        Some(Self {
-            temperature: cw.temperature,
-            wind_speed: cw.windspeed,
-            wind_direction: cw.winddirection,
-            condition: WeatherCondition::from_code(cw.weathercode),
-            weather_code: cw.weathercode,
-            is_day: cw.is_day > 0.5,
-            time: cw.time.clone(),
-            latitude: data.latitude,
-            longitude: data.longitude,
-            timezone: data.timezone.clone(),
-        })
-    }
-}
-
-impl fmt::Display for WeatherInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let day_night = if self.is_day { "☀️ Day" } else { "🌙 Night" };
-        write!(
-            f,
-            "📍 ({:.4}, {:.4}) — {}\n\
-             🌡️  {:.1} °C\n\
-             💨 {:.1} km/h from {:.0}°\n\
-             🌤️  {}\n\
-             🕐 {} | {}",
-            self.latitude,
-            self.longitude,
-            self.timezone,
-            self.temperature,
-            self.wind_speed,
-            self.wind_direction,
-            self.condition,
-            self.time,
-            day_night,
-        )
-    }
-}
-
-/// A `Send + Sync` wrapper for boxed errors originating from async I/O.
-///
-/// All concrete error types stored here come from `reqwest`, `serde_json`,
-/// and `open-meteo-api`, which are known to be `Send + Sync`.  The `unsafe`
-/// impl is confined to this single type rather than spread across the whole
-/// [`WeatherError`] enum.
-///
-/// To prevent accidental construction from non-`Send + Sync` errors, prefer
-/// using `String::from(msg).into()` for ad-hoc messages and let the `From<E>`
-/// blanket impl handle concrete types that already satisfy the bounds.
-#[derive(Debug)]
-pub struct BoxedError(Box<dyn std::error::Error>);
-
-// SAFETY: BoxedError is only constructed from error types that originate from
-// reqwest, serde_json, and open-meteo-api, all of which are Send + Sync.
-// String-based messages are also Send + Sync.
-unsafe impl Send for BoxedError {}
-unsafe impl Sync for BoxedError {}
-
-impl fmt::Display for BoxedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl std::error::Error for BoxedError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.0.source()
-    }
-}
-
-impl From<Box<dyn std::error::Error>> for BoxedError {
-    fn from(e: Box<dyn std::error::Error>) -> Self {
-        Self(e)
-    }
+/// Format an [`OpenMeteoData`] response as a human-readable weather message.
+pub fn format_weather(data: &OpenMeteoData) -> String {
+    let cw = match &data.current_weather {
+        Some(cw) => cw,
+        None => return "No current weather data available".to_string(),
+    };
+    let condition = WeatherCondition::from_code(cw.weathercode);
+    let day_night = if cw.is_day > 0.5 { "☀️ Day" } else { "🌙 Night" };
+    format!(
+        "📍 ({:.4}, {:.4}) — {}\n\
+         🌡️  {:.1} °C\n\
+         💨 {:.1} km/h from {:.0}°\n\
+         🌤️  {}\n\
+         🕐 {} | {}",
+        data.latitude,
+        data.longitude,
+        data.timezone,
+        cw.temperature,
+        cw.windspeed,
+        cw.winddirection,
+        condition,
+        cw.time,
+        day_night,
+    )
 }
 
 /// Errors that can occur when fetching weather data.
@@ -281,9 +193,9 @@ pub enum WeatherError {
     /// The API did not return current weather data for the given location.
     NoCurrentWeather,
     /// An error from the underlying HTTP / API layer.
-    ApiError(BoxedError),
+    ApiError(Box<dyn Error + Send + Sync>),
     /// Failed to build the API query.
-    QueryBuildError(BoxedError),
+    QueryBuildError(Box<dyn Error + Send + Sync>),
 }
 
 impl fmt::Display for WeatherError {
@@ -301,16 +213,10 @@ impl fmt::Display for WeatherError {
 impl std::error::Error for WeatherError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ApiError(e) => Some(e),
-            Self::QueryBuildError(e) => Some(e),
+            Self::ApiError(e) => e.source(),
+            Self::QueryBuildError(e) => e.source(),
             Self::NoCurrentWeather => None,
         }
-    }
-}
-
-impl From<Box<dyn std::error::Error>> for WeatherError {
-    fn from(e: Box<dyn std::error::Error>) -> Self {
-        Self::ApiError(BoxedError(e))
     }
 }
 
@@ -324,25 +230,29 @@ impl From<Box<dyn std::error::Error>> for WeatherError {
 ///
 /// Returns a [`WeatherError`] if the API call fails, the query cannot be built,
 /// or no current weather data is available.
-pub async fn get_current_weather(location: &Location) -> Result<WeatherInfo, WeatherError> {
+pub async fn get_current_weather(location: &Location) -> Result<OpenMeteoData, WeatherError> {
     let (lat, lon) = match location {
         Location::Coordinates { latitude, longitude } => (*latitude, *longitude),
-        Location::City { .. } => {
-            return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
+        Location::City(_) => {
+            return Err(WeatherError::QueryBuildError(Box::from(
                 "get_current_weather does not support city names; use get_weather()",
-            ))));
+            )));
         }
     };
 
     let query = OpenMeteo::new()
         .coordinates(lat, lon)
-        .map_err(|e| WeatherError::QueryBuildError(e.into()))?
+        .map_err(|e| WeatherError::QueryBuildError(Box::from(e.to_string())))?
         .current_weather()
-        .map_err(|e| WeatherError::QueryBuildError(e.into()))?;
+        .map_err(|e| WeatherError::QueryBuildError(Box::from(e.to_string())))?;
 
-    let data: OpenMeteoData = query.query().await.map_err(|e| WeatherError::ApiError(e.into()))?;
+    let data: OpenMeteoData =
+        query.query().await.map_err(|e| WeatherError::ApiError(Box::from(e.to_string())))?;
 
-    WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
+    if data.current_weather.is_none() {
+        return Err(WeatherError::NoCurrentWeather);
+    }
+    Ok(data)
 }
 
 /// Fetch the current weather for a given [`Location`], including city-name-based
@@ -351,31 +261,40 @@ pub async fn get_current_weather(location: &Location) -> Result<WeatherInfo, Wea
 /// This is the recommended entry point. It handles both coordinate-based and
 /// city-name-based locations.
 ///
+/// `api_key` is only used for city-name lookups; it may be empty, in which
+/// case city-name queries will fail with an error.
+///
 /// # Errors
 ///
 /// Returns a [`WeatherError`] if the API call or geocoding fails.
-pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherError> {
+pub async fn get_weather(
+    location: &Location,
+    api_key: &str,
+) -> Result<OpenMeteoData, WeatherError> {
     match location {
         Location::Coordinates { .. } => get_current_weather(location).await,
-        Location::City { name, api_key } => {
+        Location::City(name) => {
             if api_key.is_empty() {
-                return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
+                return Err(WeatherError::QueryBuildError(Box::from(
                     "City name lookups require a geocoding API key. \
                      Call meteo_init() first or use coordinates.",
-                ))));
+                )));
             }
 
             let data: OpenMeteoData = OpenMeteo::new()
                 .location(name, api_key)
                 .await
-                .map_err(|e| WeatherError::ApiError(e.into()))?
+                .map_err(|e| WeatherError::ApiError(Box::from(e.to_string())))?
                 .current_weather()
-                .map_err(|e| WeatherError::QueryBuildError(e.into()))?
+                .map_err(|e| WeatherError::QueryBuildError(Box::from(e.to_string())))?
                 .query()
                 .await
-                .map_err(|e| WeatherError::ApiError(e.into()))?;
+                .map_err(|e| WeatherError::ApiError(Box::from(e.to_string())))?;
 
-            WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
+            if data.current_weather.is_none() {
+                return Err(WeatherError::NoCurrentWeather);
+            }
+            Ok(data)
         }
     }
 }

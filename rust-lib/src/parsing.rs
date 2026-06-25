@@ -18,13 +18,9 @@ use crate::Location;
 ///
 /// | Input pattern                          | Result                             |
 /// |----------------------------------------|------------------------------------|
-/// | Letters, spaces, `-`, `'` (e.g. `"O'Reilly"`) | `Location::City` (empty API key)   |
+/// | Letters, spaces, `-`, `'` (e.g. `"O'Reilly"`) | `Location::City`                  |
 /// | `"lat,lon"` (e.g. `"51.5,-0.12"`)      | `Location::Coordinates`            |
 /// | Anything else                          | `Err(“…”)`                         |
-///
-/// **Note:** The returned `Location::City` has an **empty** `api_key` field.
-/// The caller is responsible for providing a geocoding API key before using
-/// the city name with [`crate::get_weather`].
 pub fn parse_location(input: &str) -> Result<Location, String> {
     let trimmed = input.trim();
 
@@ -34,7 +30,7 @@ pub fn parse_location(input: &str) -> Result<Location, String> {
 
     // Case 1: letters, spaces, hyphens, apostrophes → city name
     if is_alphabetic(trimmed) {
-        return Ok(Location::City { name: trimmed.to_string(), api_key: String::new() });
+        return Ok(Location::City(trimmed.to_string()));
     }
 
     // Case 2: try parsing as "latitude,longitude"
@@ -206,10 +202,7 @@ mod tests {
     fn parse_city_name() {
         let loc = parse_location("London").unwrap();
         match loc {
-            Location::City { name, api_key } => {
-                assert_eq!(name, "London");
-                assert!(api_key.is_empty());
-            }
+            Location::City(name) => assert_eq!(name, "London"),
             _ => panic!("expected City variant"),
         }
     }
@@ -218,7 +211,7 @@ mod tests {
     fn parse_city_name_accented() {
         let loc = parse_location("Kraków").unwrap();
         match loc {
-            Location::City { name, .. } => assert_eq!(name, "Kraków"),
+            Location::City(name) => assert_eq!(name, "Kraków"),
             _ => panic!("expected City variant"),
         }
     }
@@ -265,7 +258,7 @@ mod tests {
     fn parse_city_name_with_spaces() {
         let loc = parse_location("New York").unwrap();
         match loc {
-            Location::City { name, .. } => assert_eq!(name, "New York"),
+            Location::City(name) => assert_eq!(name, "New York"),
             _ => panic!("expected City variant"),
         }
     }
@@ -274,12 +267,12 @@ mod tests {
     fn parse_city_name_with_punctuation() {
         let loc = parse_location("O'Reilly").unwrap();
         match loc {
-            Location::City { name, .. } => assert_eq!(name, "O'Reilly"),
+            Location::City(name) => assert_eq!(name, "O'Reilly"),
             _ => panic!("expected City variant"),
         }
         let loc = parse_location("Côte-d'Or").unwrap();
         match loc {
-            Location::City { name, .. } => assert_eq!(name, "Côte-d'Or"),
+            Location::City(name) => assert_eq!(name, "Côte-d'Or"),
             _ => panic!("expected City variant"),
         }
     }
@@ -288,7 +281,7 @@ mod tests {
     fn parse_trimmed_input() {
         let loc = parse_location("  Tokyo  ").unwrap();
         match loc {
-            Location::City { name, .. } => assert_eq!(name, "Tokyo"),
+            Location::City(name) => assert_eq!(name, "Tokyo"),
             _ => panic!("expected City"),
         }
     }
