@@ -21,11 +21,13 @@
 #include <telebot.h>
 
 #include "meteo.h"
+#include "responder.h"
 
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 
 static apr_pool_t *g_pool = NULL;
 static telebot_handler_t g_handle;
+static MeteoContext *g_meteo = NULL;
 static volatile int g_running = 1;
 
 /* ── Signal handler ───────────────────────────────────────────────────────── */
@@ -49,32 +51,24 @@ static void handle_start(const telebot_message_t *msg) {
                          NULL, false, false, 0, NULL);
 }
 
-/* ── /weather command ─────────────────────────────────────────────────────── */
+/* ── Weather handler (non-blocking) ───────────────────────────────────────── */
 
 static void handle_weather(const telebot_message_t *msg, const char *arg) {
     if (!arg || strlen(arg) == 0) {
         telebot_send_message(g_handle, msg->chat->id,
-                             "⚠️  Usage: /weather 51.5074,-0.1278  or  /weather London",
+                             "⚠️  Usage: send coordinates like 51.5074,-0.1278"
+                             " or a city name like London",
                              NULL, false, false, 0, NULL);
         return;
     }
 
-    /* Call rust-lib via its C FFI */
-    CWeatherInfo wi = meteo_get(arg);
+    /* Allocate chat_id on the heap so the callback can free it */
+    long long *chat_id = malloc(sizeof(*chat_id));
+    *chat_id = msg->chat->id;
 
-    /* Log internal error details if present */
-    if (wi.err) {
-        fprintf(stderr, "[weather-bot] internal error: %s\n", wi.err);
-    }
-
-    /* message is always set — weather string on success, user-friendly
-       error description on failure */
-    const char *reply = wi.message;
-
-    telebot_send_message(g_handle, msg->chat->id, reply,
-                         NULL, false, false, 0, NULL);
-
-    meteo_free(&wi);
+    /* Fire-and-forget: meteo_get returns immediately; the callback
+       will push the result into the queue when ready. */
+    meteo_get(g_meteo, arg, responder_weather_callback, chat_id);
 }
 
 /* ── Message dispatcher ───────────────────────────────────────────────────── */
@@ -214,9 +208,12 @@ int main(int argc, char **argv) {
     /* Make a mutable copy — telebot_create expects char* */
     char *token_mut = apr_pstrdup(g_pool, token);
 
-    /* ── Initialize geocoding (optional) ────────────────────────────────── */
-    if (geokey) {
-        meteo_init(geokey);
+    /* ── Initialize weather library (geocoding + async runtime) ──────────── */
+    g_meteo = meteo_init(geokey);
+    if (!g_meteo) {
+        fprintf(stderr, "Failed to initialize weather library\n");
+        apr_pool_destroy(g_pool);
+        return 1;
     }
 
     /* ── Initialize telebot ──────────────────────────────────────────────── */
@@ -224,6 +221,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to create telebot handler\n");
         apr_pool_destroy(g_pool);
         return 1;
+    }
+
+    /* ── Start the response subsystem (queue + sender thread) ───────────── */
+    {
+        apr_pool_t *resp_pool = NULL;
+        apr_pool_create(&resp_pool, NULL);  /* standalone — survives g_pool clears */
+        if (responder_init(resp_pool, g_handle) != 0) {
+            fprintf(stderr, "Failed to start response subsystem\n");
+            apr_pool_destroy(resp_pool);
+            telebot_destroy(g_handle);
+            meteo_shutdown(g_meteo);
+            apr_pool_destroy(g_pool);
+            return 1;
+        }
     }
 
     /* ── Setup signal handling ───────────────────────────────────────────── */
@@ -234,7 +245,10 @@ int main(int argc, char **argv) {
     polling_loop();
 
     /* ── Cleanup ─────────────────────────────────────────────────────────── */
+    responder_shutdown();
+
     telebot_destroy(g_handle);
+    meteo_shutdown(g_meteo);
     apr_pool_destroy(g_pool);
 
     printf("👋  Bot stopped.\n");

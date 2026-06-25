@@ -55,6 +55,7 @@ corrosion_import_crate(
 
 add_executable(${PROJECT_NAME}
     src/main.c
+    src/responder.c
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

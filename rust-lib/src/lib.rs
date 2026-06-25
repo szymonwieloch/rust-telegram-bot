@@ -26,23 +26,54 @@ use open_meteo_api::{
     query::OpenMeteo,
 };
 use std::fmt;
-use std::sync::OnceLock;
+use std::future::Future;
 
-/// Global geocoding API key, set once via [`init_geocoding_key`].
-static GEOCODING_API_KEY: OnceLock<String> = OnceLock::new();
+/// Opaque context holding the geocoding API key and Tokio async runtime.
+///
+/// Created via [`MeteoContext::new`] and passed to all FFI functions.
+/// The C side treats this as an opaque pointer.
+pub struct MeteoContext {
+    geocoding_api_key: String,
+    runtime: tokio::runtime::Runtime,
+}
 
-/// Store the geocoding API key for city-name lookups.
-///
-/// Must be called before any city-name-based weather queries.
-/// If called more than once, subsequent calls are ignored (the first key wins).
-///
-/// # Example
-///
-/// ```rust
-/// meteo::init_geocoding_key("my_api_key".to_string());
-/// ```
-pub fn init_geocoding_key(key: String) {
-    let _ = GEOCODING_API_KEY.set(key);
+impl MeteoContext {
+    /// Create a new context with the given geocoding API key.
+    ///
+    /// `geokey` may be empty to disable city-name lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message if the Tokio runtime could not be created.
+    pub fn new(geokey: String) -> Result<Self, String> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("failed to create tokio runtime: {}", e))?;
+        Ok(Self {
+            geocoding_api_key: geokey,
+            runtime,
+        })
+    }
+
+    /// The stored geocoding API key (may be empty).
+    pub fn api_key(&self) -> &str {
+        &self.geocoding_api_key
+    }
+
+    /// Borrow the underlying Tokio runtime (for `enter()` / spawning).
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
+    /// Execute an async future on this context's runtime, blocking the
+    /// current thread until completion.
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
+    }
+
+    /// Shut down the Tokio runtime and consume the context.
+    pub fn shutdown(self) {
+        self.runtime.shutdown_background();
+    }
 }
 
 /// Represents a location to query weather for.
@@ -224,6 +255,12 @@ pub enum WeatherError {
     QueryBuildError(Box<dyn std::error::Error>),
 }
 
+// SAFETY: All concrete error types stored in this enum (reqwest errors,
+// serde errors, open-meteo-api errors) are `Send`.  The `dyn Error`
+// erasure drops that information from the vtable, but the underlying
+// allocations are always safe to transfer across thread boundaries.
+unsafe impl Send for WeatherError {}
+
 impl fmt::Display for WeatherError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -321,15 +358,7 @@ pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherErro
     match location {
         Location::Coordinates { .. } => get_current_weather(location).await,
         Location::City { name, api_key } => {
-            // Use the provided key, or fall back to the global one set via
-            // init_geocoding_key() / meteo_init().
-            let key = if api_key.is_empty() {
-                GEOCODING_API_KEY.get().cloned().unwrap_or_default()
-            } else {
-                api_key.clone()
-            };
-
-            if key.is_empty() {
+            if api_key.is_empty() {
                 return Err(WeatherError::QueryBuildError(
                     "City name lookups require a geocoding API key. \
                      Call meteo_init() first or use coordinates."
@@ -339,7 +368,7 @@ pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherErro
             }
 
             let data: OpenMeteoData = OpenMeteo::new()
-                .location(name, &key)
+                .location(name, api_key)
                 .await
                 .map_err(WeatherError::ApiError)?
                 .current_weather()
