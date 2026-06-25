@@ -97,6 +97,7 @@ jobs:
             --suppress='*:test/abts.c' \
             -I include \
             -I src \
+            $(pkg-config --cflags-only-I apr-1 apr-util-1) \
             src/ test/
 
   # ═══════════════════════════════════════════════════════════════════════════
