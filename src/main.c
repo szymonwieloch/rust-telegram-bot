@@ -97,8 +97,7 @@ static void on_message(telebot_handler_t handle, const MeteoContext *meteo,
 
 /* ── Polling loop ─────────────────────────────────────────────────────────── */
 
-static void polling_loop(apr_pool_t *pool, telebot_handler_t handle,
-                         const MeteoContext *meteo)
+static void polling_loop(apr_pool_t *pool, telebot_handler_t handle, const MeteoContext *meteo)
 {
     int offset = 0, limit = 10, timeout = 1;
     telebot_error_e ret;
@@ -152,15 +151,14 @@ static void polling_loop(apr_pool_t *pool, telebot_handler_t handle,
  * @param geokey [out] set to the --geokey value, or NULL
  * @return       0 on success, 1 on error, 2 if --help was shown
  */
-static int parse_args(apr_pool_t *pool, int argc, char **argv,
-                      const char **token, const char **geokey)
+static int parse_args(apr_pool_t *pool, int argc, char **argv, const char **token,
+                      const char **geokey)
 {
     *token = NULL;
     *geokey = NULL;
 
     apr_getopt_t *opt;
-    apr_status_t rv = apr_getopt_init(&opt, pool, argc,
-                                      (const char *const *) argv);
+    apr_status_t rv = apr_getopt_init(&opt, pool, argc, (const char *const *) argv);
     if (rv != APR_SUCCESS) {
         fprintf(stderr, "Failed to initialize option parser\n");
         return 1;
@@ -176,8 +174,7 @@ static int parse_args(apr_pool_t *pool, int argc, char **argv,
 
     int optch;
     const char *optarg;
-    while ((rv = apr_getopt_long(opt, options, &optch, &optarg))
-           == APR_SUCCESS) {
+    while ((rv = apr_getopt_long(opt, options, &optch, &optarg)) == APR_SUCCESS) {
         switch (optch) {
         case 't':
             *token = optarg;
@@ -189,11 +186,8 @@ static int parse_args(apr_pool_t *pool, int argc, char **argv,
             printf("Usage: %s --token <TOKEN> [--geokey <KEY>]\n", argv[0]);
             printf("\nOptions:\n");
             for (int i = 0; options[i].name != NULL; i++) {
-                printf("  -%c, --%-8s %s\n",
-                       options[i].optch, options[i].name,
-                       options[i].description
-                           ? options[i].description
-                           : "");
+                printf("  -%c, --%-8s %s\n", options[i].optch, options[i].name,
+                       options[i].description ? options[i].description : "");
             }
             return 2; /* caller should exit with 0 */
         default:
