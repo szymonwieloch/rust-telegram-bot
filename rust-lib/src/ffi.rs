@@ -227,7 +227,7 @@ pub unsafe extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
 /// Convert a Rust string into an owned `*const c_char` suitable for FFI.
 /// The caller is responsible for freeing the returned pointer with `CString::from_raw`.
 fn into_c_str(s: &str) -> *const c_char {
-    CString::new(s)
-        .unwrap_or_else(|_| CString::new("string contains null byte").unwrap())
-        .into_raw()
+    // Strip interior null bytes (which CString::new rejects) so this is infallible.
+    let sanitized: String = s.chars().filter(|&c| c != '\0').collect();
+    CString::new(sanitized).unwrap().into_raw()
 }

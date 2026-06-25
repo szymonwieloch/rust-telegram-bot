@@ -54,7 +54,10 @@ static void *APR_THREAD_FUNC sender_thread_func(apr_thread_t *thd, void *arg)
         }
         /* st == APR_SUCCESS */
         response_msg_t *msg = (response_msg_t *) data;
-        telebot_send_message(g_handle, msg->chat_id, msg->text, NULL, false, false, 0, NULL);
+        telebot_error_e ret = telebot_send_message(g_handle, msg->chat_id, msg->text, NULL, false, false, 0, NULL);
+        if (ret != TELEBOT_ERROR_NONE) {
+            fprintf(stderr, "[weather-bot] send_message failed (chat %lld): %d\n", msg->chat_id, ret);
+        }
         free(msg->text);
         free(msg);
     }
@@ -102,7 +105,17 @@ void responder_weather_callback(void *user_context, CWeatherInfo wi)
     response_msg_t *msg = malloc(sizeof(*msg));
     msg->chat_id = chat_id;
     msg->text = strdup(wi.message);
-    apr_queue_push(g_queue, msg);
+    if (!msg->text) {
+        fprintf(stderr, "[weather-bot] strdup failed\n");
+        free(msg);
+    } else {
+        apr_status_t st = apr_queue_push(g_queue, msg);
+        if (st != APR_SUCCESS) {
+            fprintf(stderr, "[weather-bot] queue push failed: %d\n", st);
+            free(msg->text);
+            free(msg);
+        }
+    }
 
     meteo_free(&wi);
 }

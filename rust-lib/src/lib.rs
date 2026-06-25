@@ -238,22 +238,48 @@ impl fmt::Display for WeatherInfo {
     }
 }
 
+/// A `Send + Sync` wrapper for boxed errors originating from async I/O.
+///
+/// All concrete error types stored here come from `reqwest`, `serde_json`,
+/// and `open-meteo-api`, which are known to be `Send + Sync`.  The `unsafe`
+/// impl is confined to this single type rather than spread across the whole
+/// [`WeatherError`] enum.
+#[derive(Debug)]
+pub struct BoxedError(Box<dyn std::error::Error>);
+
+// SAFETY: BoxedError is only constructed from error types that originate from
+// reqwest, serde_json, and open-meteo-api, all of which are Send + Sync.
+unsafe impl Send for BoxedError {}
+unsafe impl Sync for BoxedError {}
+
+impl fmt::Display for BoxedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BoxedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+impl From<Box<dyn std::error::Error>> for BoxedError {
+    fn from(e: Box<dyn std::error::Error>) -> Self {
+        Self(e)
+    }
+}
+
 /// Errors that can occur when fetching weather data.
 #[derive(Debug)]
 pub enum WeatherError {
     /// The API did not return current weather data for the given location.
     NoCurrentWeather,
     /// An error from the underlying HTTP / API layer.
-    ApiError(Box<dyn std::error::Error>),
+    ApiError(BoxedError),
     /// Failed to build the API query.
-    QueryBuildError(Box<dyn std::error::Error>),
+    QueryBuildError(BoxedError),
 }
-
-// SAFETY: All concrete error types stored in this enum (reqwest errors,
-// serde errors, open-meteo-api errors) are `Send`.  The `dyn Error`
-// erasure drops that information from the vtable, but the underlying
-// allocations are always safe to transfer across thread boundaries.
-unsafe impl Send for WeatherError {}
 
 impl fmt::Display for WeatherError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -270,8 +296,8 @@ impl fmt::Display for WeatherError {
 impl std::error::Error for WeatherError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ApiError(e) => Some(e.as_ref()),
-            Self::QueryBuildError(e) => Some(e.as_ref()),
+            Self::ApiError(e) => Some(e),
+            Self::QueryBuildError(e) => Some(e),
             Self::NoCurrentWeather => None,
         }
     }
@@ -279,64 +305,40 @@ impl std::error::Error for WeatherError {
 
 impl From<Box<dyn std::error::Error>> for WeatherError {
     fn from(e: Box<dyn std::error::Error>) -> Self {
-        Self::ApiError(e)
+        Self::ApiError(BoxedError(e))
     }
 }
 
 /// Fetch the current weather for a given [`Location`].
 ///
+/// Only handles [`Location::Coordinates`]; for city names use [`get_weather`].
+///
 /// # Errors
 ///
 /// Returns a [`WeatherError`] if the API call fails, the query cannot be built,
 /// or no current weather data is available.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use meteo::{get_current_weather, Location};
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let loc = Location::Coordinates {
-///         latitude: 52.52,
-///         longitude: 13.41,
-///     };
-///     let weather = get_current_weather(&loc).await?;
-///     println!("{}", weather);
-///     Ok(())
-/// }
-/// ```
 pub async fn get_current_weather(location: &Location) -> Result<WeatherInfo, WeatherError> {
-    let query = build_query(location)?;
+    let (lat, lon) = match location {
+        Location::Coordinates { latitude, longitude } => (*latitude, *longitude),
+        Location::City { .. } => {
+            return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
+                "get_current_weather does not support city names; use get_weather()",
+            ))));
+        }
+    };
 
-    let data: OpenMeteoData = query.query().await.map_err(WeatherError::ApiError)?;
+    let query = OpenMeteo::new()
+        .coordinates(lat, lon)
+        .map_err(|e| WeatherError::QueryBuildError(e.into()))?
+        .current_weather()
+        .map_err(|e| WeatherError::QueryBuildError(e.into()))?;
+
+    let data: OpenMeteoData = query
+        .query()
+        .await
+        .map_err(|e| WeatherError::ApiError(e.into()))?;
 
     WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
-}
-
-/// Build the `OpenMeteo` query builder from a [`Location`].
-fn build_query(location: &Location) -> Result<OpenMeteo, WeatherError> {
-    let builder = OpenMeteo::new();
-
-    match location {
-        Location::Coordinates { latitude, longitude } => {
-            builder.coordinates(*latitude, *longitude).map_err(WeatherError::QueryBuildError)
-        }
-
-        Location::City { name: _name, api_key: _api_key } => {
-            // Note: `location()` is async because it geocodes the name first.
-            // We handle that in a separate async function path.
-            // For the City variant, use `get_current_weather` which calls
-            // `build_query_city` internally.
-            Err(WeatherError::QueryBuildError(
-                "Use get_current_weather() for City locations (requires async geocoding)"
-                    .to_string()
-                    .into(),
-            ))
-        }
-    }?
-    .current_weather()
-    .map_err(WeatherError::QueryBuildError)
 }
 
 /// Fetch the current weather for a given [`Location`], including city-name-based
@@ -353,23 +355,21 @@ pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherErro
         Location::Coordinates { .. } => get_current_weather(location).await,
         Location::City { name, api_key } => {
             if api_key.is_empty() {
-                return Err(WeatherError::QueryBuildError(
+                return Err(WeatherError::QueryBuildError(BoxedError(Box::from(
                     "City name lookups require a geocoding API key. \
-                     Call meteo_init() first or use coordinates."
-                        .to_string()
-                        .into(),
-                ));
+                     Call meteo_init() first or use coordinates.",
+                ))));
             }
 
             let data: OpenMeteoData = OpenMeteo::new()
                 .location(name, api_key)
                 .await
-                .map_err(WeatherError::ApiError)?
+                .map_err(|e| WeatherError::ApiError(e.into()))?
                 .current_weather()
-                .map_err(WeatherError::QueryBuildError)?
+                .map_err(|e| WeatherError::QueryBuildError(e.into()))?
                 .query()
                 .await
-                .map_err(WeatherError::ApiError)?;
+                .map_err(|e| WeatherError::ApiError(e.into()))?;
 
             WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
         }
