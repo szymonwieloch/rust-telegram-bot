@@ -67,6 +67,9 @@ jobs:
             ! -path './_deps/*' \
             ! -path './corrosion/*' \
             ! -path './target/*' \
+            ! -path './rust-lib/target/*' \
+            ! -name 'abts.c' \
+            ! -name 'abts.h' \
             -print0 | xargs -0 clang-format --dry-run --Werror
 
   # ═══════════════════════════════════════════════════════════════════════════

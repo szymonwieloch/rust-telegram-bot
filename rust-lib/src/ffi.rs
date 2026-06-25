@@ -50,11 +50,11 @@ pub struct CWeatherInfo {
 ///
 /// `geokey` must be a valid, null-terminated C string, or `NULL`.
 #[no_mangle]
-pub extern "C" fn meteo_init(geokey: *const c_char) -> *mut MeteoContext {
+pub unsafe extern "C" fn meteo_init(geokey: *const c_char) -> *mut MeteoContext {
     let key = if geokey.is_null() {
         String::new()
     } else {
-        match unsafe { CStr::from_ptr(geokey) }.to_str() {
+        match CStr::from_ptr(geokey).to_str() {
             Ok(s) => s.to_string(),
             Err(_) => {
                 // Non-UTF-8 key → treat as if none was provided.
@@ -86,7 +86,7 @@ pub type CWeatherCallback = extern "C" fn(*mut c_void, CWeatherInfo);
 /// `callback` must be a valid function pointer and must remain callable
 /// until it is invoked.
 #[no_mangle]
-pub extern "C" fn meteo_get(
+pub unsafe extern "C" fn meteo_get(
     ctx: *const MeteoContext,
     location: *const c_char,
     callback: CWeatherCallback,
@@ -114,10 +114,10 @@ pub extern "C" fn meteo_get(
         return;
     }
 
-    let ctx = unsafe { &*ctx };
+    let ctx = &*ctx;
 
     // Parse the location string — we need to own a copy for the async task.
-    let loc_str = match unsafe { CStr::from_ptr(location) }.to_str() {
+    let loc_str = match CStr::from_ptr(location).to_str() {
         Ok(s) => s.to_string(),
         Err(e) => {
             callback(
@@ -181,11 +181,11 @@ pub extern "C" fn meteo_get(
 /// `ctx` must be a valid pointer returned by [`meteo_init`] and must not
 /// have been passed to this function before.  `NULL` is safe (no-op).
 #[no_mangle]
-pub extern "C" fn meteo_shutdown(ctx: *mut MeteoContext) {
+pub unsafe extern "C" fn meteo_shutdown(ctx: *mut MeteoContext) {
     if ctx.is_null() {
         return;
     }
-    let ctx = unsafe { Box::from_raw(ctx) };
+    let ctx = Box::from_raw(ctx);
     ctx.shutdown();
     // Box is dropped here → MeteoContext memory is freed
 }
@@ -202,28 +202,26 @@ pub extern "C" fn meteo_shutdown(ctx: *mut MeteoContext) {
 /// to a callback and not yet freed.  After this call the pointer is
 /// invalid for reading.
 #[no_mangle]
-pub extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
+pub unsafe extern "C" fn meteo_free(wi: *mut CWeatherInfo) {
     if wi.is_null() {
         return;
     }
 
-    unsafe {
-        let wi = &mut *wi;
+    let wi = &mut *wi;
 
-        // Free the C strings if they were allocated
-        if !wi.message.is_null() {
-            let _ = CString::from_raw(wi.message as *mut c_char);
-        }
-        if !wi.err.is_null() {
-            let _ = CString::from_raw(wi.err as *mut c_char);
-        }
-
-        // Convert back to Box to free the struct itself
-        // Note: we can't drop through Box here since the struct was
-        // returned by value. The caller allocates it on their stack.
-        // We only need to free the inner strings — the struct itself
-        // is managed by the caller.
+    // Free the C strings if they were allocated
+    if !wi.message.is_null() {
+        let _ = CString::from_raw(wi.message as *mut c_char);
     }
+    if !wi.err.is_null() {
+        let _ = CString::from_raw(wi.err as *mut c_char);
+    }
+
+    // Convert back to Box to free the struct itself
+    // Note: we can't drop through Box here since the struct was
+    // returned by value. The caller allocates it on their stack.
+    // We only need to free the inner strings — the struct itself
+    // is managed by the caller.
 }
 
 /// Convert a Rust string into an owned `*const c_char` suitable for FFI.

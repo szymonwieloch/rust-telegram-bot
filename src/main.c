@@ -33,28 +33,29 @@ static volatile int g_running = 1;
 
 /* ── Signal handler ───────────────────────────────────────────────────────── */
 
-static void on_signal(int sig) {
-    (void)sig;
+static void on_signal(int sig)
+{
+    (void) sig;
     g_running = 0;
 }
 
 /* ── /start command ───────────────────────────────────────────────────────── */
 
-static void handle_start(const telebot_message_t *msg) {
-    const char *reply_text =
-        "🌤️  Hello! Send me a location like:\n\n"
-        "    51.5074,-0.1278\n"
-        "    London\n"
-        "    New York\n\n"
-        "and I'll tell you the current weather there.\n";
+static void handle_start(const telebot_message_t *msg)
+{
+    const char *reply_text = "🌤️  Hello! Send me a location like:\n\n"
+                             "    51.5074,-0.1278\n"
+                             "    London\n"
+                             "    New York\n\n"
+                             "and I'll tell you the current weather there.\n";
 
-    telebot_send_message(g_handle, msg->chat->id, reply_text,
-                         NULL, false, false, 0, NULL);
+    telebot_send_message(g_handle, msg->chat->id, reply_text, NULL, false, false, 0, NULL);
 }
 
 /* ── Weather handler (non-blocking) ───────────────────────────────────────── */
 
-static void handle_weather(const telebot_message_t *msg, const char *arg) {
+static void handle_weather(const telebot_message_t *msg, const char *arg)
+{
     if (utils_is_blank(arg)) {
         telebot_send_message(g_handle, msg->chat->id,
                              "⚠️  Usage: send coordinates like 51.5074,-0.1278"
@@ -74,8 +75,10 @@ static void handle_weather(const telebot_message_t *msg, const char *arg) {
 
 /* ── Message dispatcher ───────────────────────────────────────────────────── */
 
-static void on_message(const telebot_message_t *msg) {
-    if (!msg || !msg->text) return;
+static void on_message(const telebot_message_t *msg)
+{
+    if (!msg || !msg->text)
+        return;
 
     const char *text = msg->text;
 
@@ -88,14 +91,15 @@ static void on_message(const telebot_message_t *msg) {
 
 /* ── Polling loop ─────────────────────────────────────────────────────────── */
 
-static void polling_loop(void) {
+static void polling_loop(void)
+{
     int offset = 0, limit = 10, timeout = 1;
     telebot_error_e ret;
     telebot_update_t *updates = NULL;
     int count;
 
     /* Only poll for message-type updates */
-    telebot_update_type_e allowed[] = { TELEBOT_UPDATE_TYPE_MESSAGE };
+    telebot_update_type_e allowed[] = {TELEBOT_UPDATE_TYPE_MESSAGE};
 
     printf("🤖  Bot started. Press Ctrl+C to stop.\n");
 
@@ -106,8 +110,7 @@ static void polling_loop(void) {
         updates = NULL;
         count = 0;
 
-        ret = telebot_get_updates(g_handle, offset, limit, timeout,
-                                  allowed, 1, &updates, &count);
+        ret = telebot_get_updates(g_handle, offset, limit, timeout, allowed, 1, &updates, &count);
         /* OPERATION_FAILED means an empty result — no new messages. */
         if (ret == TELEBOT_ERROR_OPERATION_FAILED) {
             continue;
@@ -132,7 +135,8 @@ static void polling_loop(void) {
 
 /* ── main ─────────────────────────────────────────────────────────────────── */
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     const char *token = NULL;
     const char *geokey = NULL;
 
@@ -150,8 +154,7 @@ int main(int argc, char **argv) {
 
     /* ── Parse command-line options with APR getopt ───────────────────────── */
     apr_getopt_t *opt;
-    apr_status_t rv = apr_getopt_init(&opt, g_pool, argc,
-                                      (const char * const *)argv);
+    apr_status_t rv = apr_getopt_init(&opt, g_pool, argc, (const char *const *) argv);
     if (rv != APR_SUCCESS) {
         fprintf(stderr, "Failed to initialize option parser\n");
         apr_pool_destroy(g_pool);
@@ -159,12 +162,12 @@ int main(int argc, char **argv) {
     }
 
     const apr_getopt_option_t options[] = {
-        { "token",  't', true,  "Telegram bot token from @BotFather (required)" },
-        { "geokey", 'k', true,  "Geocoding API key from https://geocode.maps.co/"
-                                " (optional; required for city-name lookups)" },
-        { "help",   'h', false, "Show this help message" },
-        { NULL, 0, false, NULL }
-    };
+        {"token", 't', true, "Telegram bot token from @BotFather (required)"},
+        {"geokey", 'k', true,
+         "Geocoding API key from https://geocode.maps.co/"
+         " (optional; required for city-name lookups)"},
+        {"help", 'h', false, "Show this help message"},
+        {NULL, 0, false, NULL}};
 
     int optch;
     const char *optarg;
@@ -180,8 +183,7 @@ int main(int argc, char **argv) {
             printf("Usage: %s --token <TOKEN> [--geokey <KEY>]\n", argv[0]);
             printf("\nOptions:\n");
             for (int i = 0; options[i].name != NULL; i++) {
-                printf("  -%c, --%-8s %s\n",
-                       options[i].optch, options[i].name,
+                printf("  -%c, --%-8s %s\n", options[i].optch, options[i].name,
                        options[i].description ? options[i].description : "");
             }
             apr_pool_destroy(g_pool);
@@ -227,7 +229,7 @@ int main(int argc, char **argv) {
     /* ── Start the response subsystem (queue + sender thread) ───────────── */
     {
         apr_pool_t *resp_pool = NULL;
-        apr_pool_create(&resp_pool, NULL);  /* standalone — survives g_pool clears */
+        apr_pool_create(&resp_pool, NULL); /* standalone — survives g_pool clears */
         if (responder_init(resp_pool, g_handle) != 0) {
             fprintf(stderr, "Failed to start response subsystem\n");
             apr_pool_destroy(resp_pool);

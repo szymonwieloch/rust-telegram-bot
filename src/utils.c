@@ -13,14 +13,15 @@
 
 /* ── trim ─────────────────────────────────────────────────────────────────── */
 
-char *utils_trim(char *str) {
+char *utils_trim(char *str)
+{
     if (!str || !*str) {
         return str;
     }
 
     /* Skip leading whitespace */
     char *start = str;
-    while (*start && isspace((unsigned char)*start)) {
+    while (*start && isspace((unsigned char) *start)) {
         start++;
     }
 
@@ -32,7 +33,7 @@ char *utils_trim(char *str) {
 
     /* Trim trailing whitespace */
     char *end = start + strlen(start);
-    while (end > start && isspace((unsigned char)*(end - 1))) {
+    while (end > start && isspace((unsigned char) *(end - 1))) {
         end--;
     }
     *end = '\0';
@@ -42,12 +43,13 @@ char *utils_trim(char *str) {
 
 /* ── is_blank ─────────────────────────────────────────────────────────────── */
 
-bool utils_is_blank(const char *str) {
+bool utils_is_blank(const char *str)
+{
     if (!str) {
         return true;
     }
     while (*str) {
-        if (!isspace((unsigned char)*str)) {
+        if (!isspace((unsigned char) *str)) {
             return false;
         }
         str++;
@@ -57,7 +59,8 @@ bool utils_is_blank(const char *str) {
 
 /* ── startswith ───────────────────────────────────────────────────────────── */
 
-bool utils_startswith(const char *str, const char *prefix) {
+bool utils_startswith(const char *str, const char *prefix)
+{
     if (!str || !prefix) {
         return false;
     }

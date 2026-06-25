@@ -85,8 +85,8 @@ void meteo_shutdown(MeteoContext *ctx);
  * @param callback      Function to call with the result.
  * @param user_context  Opaque pointer forwarded to `callback`.  May be NULL.
  */
-void meteo_get(const MeteoContext *ctx, const char *location,
-               meteo_callback_t callback, void *user_context);
+void meteo_get(const MeteoContext *ctx, const char *location, meteo_callback_t callback,
+               void *user_context);
 
 /**
  * Free a CWeatherInfo struct — must be called by the meteo_callback_t

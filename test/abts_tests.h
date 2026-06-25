@@ -9,8 +9,6 @@ abts_suite *test_utils(abts_suite *suite);
 
 const struct testlist {
     abts_suite *(*func)(abts_suite *suite);
-} alltests[] = {
-    {test_utils}
-};
+} alltests[] = {{test_utils}};
 
 #endif /* ABTS_TESTS_H */

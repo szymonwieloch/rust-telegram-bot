@@ -9,7 +9,8 @@
 
 apr_pool_t *p = NULL;
 
-void initialize(void) {
+void initialize(void)
+{
     if (apr_initialize() != APR_SUCCESS) {
         fprintf(stderr, "FATAL: apr_initialize failed\n");
         exit(1);
