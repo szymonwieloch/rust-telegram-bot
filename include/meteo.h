@@ -24,10 +24,22 @@ typedef struct CWeatherInfo {
 } CWeatherInfo;
 
 /**
+ * Set the geocoding API key for city-name lookups.
+ *
+ * Must be called before any city-name-based weather queries.  The key can be
+ * obtained for free from https://geocode.maps.co/.
+ *
+ * @param geokey  A null-terminated C string containing the API key.
+ *                May be NULL or empty to disable city-name lookups.
+ */
+void meteo_init(const char *geokey);
+
+/**
  * Fetch current weather for a location.
  *
- * @param location  A null-terminated C string in "latitude,longitude" format
- *                  (e.g. "51.5074,-0.1278" for London).
+ * @param location  A null-terminated C string in either format:
+ *                  - "latitude,longitude" (e.g. "51.5074,-0.1278" for London)
+ *                  - a city name (e.g. "London") — requires meteo_init() first
  * @return          A CWeatherInfo struct (see above).
  */
 CWeatherInfo meteo_get(const char *location);

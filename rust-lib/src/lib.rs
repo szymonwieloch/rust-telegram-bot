@@ -26,6 +26,24 @@ use open_meteo_api::{
     query::OpenMeteo,
 };
 use std::fmt;
+use std::sync::OnceLock;
+
+/// Global geocoding API key, set once via [`init_geocoding_key`].
+static GEOCODING_API_KEY: OnceLock<String> = OnceLock::new();
+
+/// Store the geocoding API key for city-name lookups.
+///
+/// Must be called before any city-name-based weather queries.
+/// If called more than once, subsequent calls are ignored (the first key wins).
+///
+/// # Example
+///
+/// ```rust
+/// meteo::init_geocoding_key("my_api_key".to_string());
+/// ```
+pub fn init_geocoding_key(key: String) {
+    let _ = GEOCODING_API_KEY.set(key);
+}
 
 /// Represents a location to query weather for.
 #[derive(Debug, Clone)]
@@ -303,8 +321,25 @@ pub async fn get_weather(location: &Location) -> Result<WeatherInfo, WeatherErro
     match location {
         Location::Coordinates { .. } => get_current_weather(location).await,
         Location::City { name, api_key } => {
+            // Use the provided key, or fall back to the global one set via
+            // init_geocoding_key() / meteo_init().
+            let key = if api_key.is_empty() {
+                GEOCODING_API_KEY.get().cloned().unwrap_or_default()
+            } else {
+                api_key.clone()
+            };
+
+            if key.is_empty() {
+                return Err(WeatherError::QueryBuildError(
+                    "City name lookups require a geocoding API key. \
+                     Call meteo_init() first or use coordinates."
+                        .to_string()
+                        .into(),
+                ));
+            }
+
             let data: OpenMeteoData = OpenMeteo::new()
-                .location(name, api_key)
+                .location(name, &key)
                 .await
                 .map_err(WeatherError::ApiError)?
                 .current_weather()

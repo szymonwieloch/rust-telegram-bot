@@ -14,7 +14,9 @@
 #include <signal.h>
 
 #include <apr_general.h>
+#include <apr_getopt.h>
 #include <apr_pools.h>
+#include <apr_strings.h>
 
 #include <telebot.h>
 
@@ -37,9 +39,10 @@ static void on_signal(int sig) {
 
 static void handle_start(const telebot_message_t *msg) {
     const char *reply_text =
-        "🌤️  Hello! Send me coordinates like:\n\n"
-        "    /weather 51.5074,-0.1278\n\n"
-        "and I'll tell you the current weather at that location.\n";
+        "🌤️  Hello! Send me a location like:\n\n"
+        "    /weather 51.5074,-0.1278\n"
+        "    /weather London\n\n"
+        "and I'll tell you the current weather there.\n";
 
     telebot_send_message(g_handle, msg->chat->id, reply_text,
                          NULL, false, false, 0, NULL);
@@ -50,7 +53,7 @@ static void handle_start(const telebot_message_t *msg) {
 static void handle_weather(const telebot_message_t *msg, const char *arg) {
     if (!arg || strlen(arg) == 0) {
         telebot_send_message(g_handle, msg->chat->id,
-                             "⚠️  Usage: /weather 51.5074,-0.1278",
+                             "⚠️  Usage: /weather 51.5074,-0.1278  or  /weather London",
                              NULL, false, false, 0, NULL);
         return;
     }
@@ -132,14 +135,10 @@ static void polling_loop(void) {
 /* ── main ─────────────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <TELEGRAM_BOT_TOKEN>\n", argv[0]);
-        return 1;
-    }
-    /* telebot_create expects char*, make a mutable copy */
-    char *token = argv[1];
+    const char *token = NULL;
+    const char *geokey = NULL;
 
-    /* ── Initialize APR ──────────────────────────────────────────────────── */
+    /* ── Initialize APR (needed early for getopt) ──────────────────────────── */
     if (apr_initialize() != APR_SUCCESS) {
         fprintf(stderr, "Failed to initialize APR\n");
         return 1;
@@ -151,9 +150,76 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* ── Parse command-line options with APR getopt ───────────────────────── */
+    apr_getopt_t *opt;
+    apr_status_t rv = apr_getopt_init(&opt, g_pool, argc,
+                                      (const char * const *)argv);
+    if (rv != APR_SUCCESS) {
+        fprintf(stderr, "Failed to initialize option parser\n");
+        apr_pool_destroy(g_pool);
+        return 1;
+    }
+
+    const apr_getopt_option_t options[] = {
+        { "token",  't', true,  "Telegram bot token from @BotFather (required)" },
+        { "geokey", 'k', true,  "Geocoding API key from https://geocode.maps.co/"
+                                " (optional; required for city-name lookups)" },
+        { "help",   'h', false, "Show this help message" },
+        { NULL, 0, false, NULL }
+    };
+
+    int optch;
+    const char *optarg;
+    while ((rv = apr_getopt_long(opt, options, &optch, &optarg)) == APR_SUCCESS) {
+        switch (optch) {
+        case 't':
+            token = optarg;
+            break;
+        case 'k':
+            geokey = optarg;
+            break;
+        case 'h':
+            printf("Usage: %s --token <TOKEN> [--geokey <KEY>]\n", argv[0]);
+            printf("\nOptions:\n");
+            for (int i = 0; options[i].name != NULL; i++) {
+                printf("  -%c, --%-8s %s\n",
+                       options[i].optch, options[i].name,
+                       options[i].description ? options[i].description : "");
+            }
+            apr_pool_destroy(g_pool);
+            return 0;
+        default:
+            fprintf(stderr, "Try '%s --help' for usage.\n", argv[0]);
+            apr_pool_destroy(g_pool);
+            return 1;
+        }
+    }
+
+    if (rv != APR_EOF) {
+        fprintf(stderr, "Option parsing error. Try '%s --help'.\n", argv[0]);
+        apr_pool_destroy(g_pool);
+        return 1;
+    }
+
+    if (!token) {
+        fprintf(stderr, "Error: --token is required.\n");
+        fprintf(stderr, "Try '%s --help' for usage.\n", argv[0]);
+        apr_pool_destroy(g_pool);
+        return 1;
+    }
+
+    /* Make a mutable copy — telebot_create expects char* */
+    char *token_mut = apr_pstrdup(g_pool, token);
+
+    /* ── Initialize geocoding (optional) ────────────────────────────────── */
+    if (geokey) {
+        meteo_init(geokey);
+    }
+
     /* ── Initialize telebot ──────────────────────────────────────────────── */
-    if (telebot_create(&g_handle, token) != TELEBOT_ERROR_NONE) {
+    if (telebot_create(&g_handle, token_mut) != TELEBOT_ERROR_NONE) {
         fprintf(stderr, "Failed to create telebot handler\n");
+        apr_pool_destroy(g_pool);
         return 1;
     }
 

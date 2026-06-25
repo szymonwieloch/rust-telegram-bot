@@ -10,6 +10,7 @@
 //!                           // (intended for logging, not shown to end users)
 //! };
 //!
+//! void meteo_init(const char *geokey);
 //! WeatherInfo meteo_get(const char *location);
 //! void meteo_free(WeatherInfo *wi);
 //! ```
@@ -17,7 +18,7 @@
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
-use crate::{get_weather, parsing::parse_location, Location};
+use crate::{get_weather, init_geocoding_key, parsing::parse_location};
 
 /// C-compatible weather result.
 ///
@@ -33,6 +34,34 @@ use crate::{get_weather, parsing::parse_location, Location};
 pub struct CWeatherInfo {
     pub message: *const c_char,
     pub err: *const c_char,
+}
+
+/// Set the geocoding API key for city-name lookups.
+///
+/// Must be called before any city-name-based weather queries.  The key can be
+/// obtained for free from <https://geocode.maps.co/>.
+///
+/// `geokey` may be `NULL` or an empty string, which disables city-name
+/// lookups (only coordinate-based queries will work).
+///
+/// # Safety
+///
+/// `geokey` must be a valid, null-terminated C string, or `NULL`.
+#[no_mangle]
+pub extern "C" fn meteo_init(geokey: *const c_char) {
+    let key = if geokey.is_null() {
+        String::new()
+    } else {
+        match unsafe { CStr::from_ptr(geokey) }.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                // Non-UTF-8 key → treat as if none was provided.
+                String::new()
+            }
+        }
+    };
+
+    init_geocoding_key(key);
 }
 
 /// Fetch current weather for a location string.
@@ -76,17 +105,6 @@ pub extern "C" fn meteo_get(location: *const c_char) -> CWeatherInfo {
             };
         }
     };
-
-    // City lookups require a geocoding API key.
-    // If one wasn't provided, return a clear error.
-    if let Location::City { api_key, .. } = &location {
-        if api_key.is_empty() {
-            return CWeatherInfo {
-                message: into_c_str("City name lookups require a geocoding API key. Use coordinates instead (e.g. 51.5074,-0.1278)."),
-                err: into_c_str("missing geocoding API key for city lookup"),
-            };
-        }
-    }
 
     // Create a Tokio runtime and block on the async call
     let rt = match tokio::runtime::Runtime::new() {
