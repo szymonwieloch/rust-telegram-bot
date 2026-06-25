@@ -340,10 +340,7 @@ pub async fn get_current_weather(location: &Location) -> Result<WeatherInfo, Wea
         .current_weather()
         .map_err(|e| WeatherError::QueryBuildError(e.into()))?;
 
-    let data: OpenMeteoData = query
-        .query()
-        .await
-        .map_err(|e| WeatherError::ApiError(e.into()))?;
+    let data: OpenMeteoData = query.query().await.map_err(|e| WeatherError::ApiError(e.into()))?;
 
     WeatherInfo::from_open_meteo_data(&data).ok_or(WeatherError::NoCurrentWeather)
 }

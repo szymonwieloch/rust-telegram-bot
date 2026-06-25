@@ -49,7 +49,8 @@ static void handle_start(const telebot_message_t *msg)
                              "    New York\n\n"
                              "and I'll tell you the current weather there.\n";
 
-    telebot_error_e ret = telebot_send_message(g_handle, msg->chat->id, reply_text, NULL, false, false, 0, NULL);
+    telebot_error_e ret =
+        telebot_send_message(g_handle, msg->chat->id, reply_text, NULL, false, false, 0, NULL);
     if (ret != TELEBOT_ERROR_NONE) {
         fprintf(stderr, "[weather-bot] /start reply failed: %d\n", ret);
     }
@@ -61,9 +62,9 @@ static void handle_weather(const telebot_message_t *msg, const char *arg)
 {
     if (utils_is_blank(arg)) {
         telebot_error_e ret = telebot_send_message(g_handle, msg->chat->id,
-                             "⚠️  Usage: send coordinates like 51.5074,-0.1278"
-                             " or a city name like London",
-                             NULL, false, false, 0, NULL);
+                                                   "⚠️  Usage: send coordinates like 51.5074,-0.1278"
+                                                   " or a city name like London",
+                                                   NULL, false, false, 0, NULL);
         if (ret != TELEBOT_ERROR_NONE) {
             fprintf(stderr, "[weather-bot] usage reply failed: %d\n", ret);
         }

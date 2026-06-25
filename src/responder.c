@@ -54,9 +54,11 @@ static void *APR_THREAD_FUNC sender_thread_func(apr_thread_t *thd, void *arg)
         }
         /* st == APR_SUCCESS */
         response_msg_t *msg = (response_msg_t *) data;
-        telebot_error_e ret = telebot_send_message(g_handle, msg->chat_id, msg->text, NULL, false, false, 0, NULL);
+        telebot_error_e ret =
+            telebot_send_message(g_handle, msg->chat_id, msg->text, NULL, false, false, 0, NULL);
         if (ret != TELEBOT_ERROR_NONE) {
-            fprintf(stderr, "[weather-bot] send_message failed (chat %lld): %d\n", msg->chat_id, ret);
+            fprintf(stderr, "[weather-bot] send_message failed (chat %lld): %d\n", msg->chat_id,
+                    ret);
         }
         free(msg->text);
         free(msg);

@@ -161,10 +161,9 @@ pub unsafe extern "C" fn meteo_get(
     tokio::spawn(async move {
         let wi = match tokio::time::timeout(Duration::from_secs(30), crate::get_weather(&loc)).await
         {
-            Ok(Ok(weather)) => CWeatherInfo {
-                message: into_c_str(&weather.to_string()),
-                err: ptr::null(),
-            },
+            Ok(Ok(weather)) => {
+                CWeatherInfo { message: into_c_str(&weather.to_string()), err: ptr::null() }
+            }
             Ok(Err(e)) => CWeatherInfo {
                 message: into_c_str("Failed to fetch weather data"),
                 err: into_c_str(&e.to_string()),
