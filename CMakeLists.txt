@@ -1,12 +1,9 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.19)
 project(telegram-weather-bot
     VERSION 0.1.0
     DESCRIPTION "Telegram bot that reports weather using rust-lib, telebot, and APR"
     LANGUAGES C
 )
-
-# Allow FetchContent_Populate for add_subdirectory(EXCLUDE_FROM_ALL) pattern
-cmake_policy(SET CMP0169 OLD)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -40,27 +37,25 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(telebot PRIVATE -Wno-error=unused-parameter -Wno-error=sign-compare)
 endif()
 
-# ── rust-lib (custom cargo build) ────────────────────────────────────────────
+# ── Corrosion (CMake ↔ Cargo bridge) ────────────────────────────────────────
 
-set(RUST_LIB_DIR  "${CMAKE_SOURCE_DIR}/rust-lib")
-set(RUST_LIB_A    "${RUST_LIB_DIR}/target/debug/libmeteo.a")
-
-add_custom_command(
-    OUTPUT  "${RUST_LIB_A}"
-    COMMAND cargo build
-    WORKING_DIRECTORY "${RUST_LIB_DIR}"
-    COMMENT "Building rust-lib with Cargo..."
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY  https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG         v0.5.1
 )
-add_custom_target(rust_lib_target DEPENDS "${RUST_LIB_A}")
+FetchContent_MakeAvailable(Corrosion)
+
+# Import the Rust crate as a proper CMake target with full dependency tracking
+corrosion_import_crate(
+    MANIFEST_PATH "${CMAKE_SOURCE_DIR}/rust-lib/Cargo.toml"
+)
 
 # ── Main executable ──────────────────────────────────────────────────────────
 
 add_executable(${PROJECT_NAME}
     src/main.c
 )
-
-# Make sure rust-lib is built before linking
-add_dependencies(${PROJECT_NAME} rust_lib_target)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
@@ -71,9 +66,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${APR_LIBRARIES}
     telebot
-    "${RUST_LIB_A}"
-    # Transitive deps of the Rust static library
-    ssl crypto pthread dl m
+    meteo
+    pthread dl m
+)
+# Tell CMake that the Rust static lib depends on OpenSSL.
+# This ensures -lssl -lcrypto appear after libmeteo.a on the link line.
+set_property(TARGET meteo APPEND PROPERTY
+    INTERFACE_LINK_LIBRARIES ssl crypto
 )
 
 # Pass rpath so telebot .so can be found at runtime

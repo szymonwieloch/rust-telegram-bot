@@ -1,8 +1,9 @@
 //! Input parsing for location strings.
 //!
 //! Supports two formats:
-//! - **City name**: any string consisting entirely of alphabetic characters
-//!   (ASCII letters a–z, A–Z). Example: `"London"`.
+//! - **City name**: any string consisting of alphabetic characters, spaces,
+//!   hyphens, and apostrophes (Unicode letters, e.g. `"Kraków"`,
+//!   `"New York"`, `"O'Reilly"`, `"Côte-d'Or"`).
 //! - **GPS coordinates**: two comma-separated decimal numbers in the form
 //!   `"latitude,longitude"`. Latitude must be in [-90, 90], longitude in
 //!   [-180, 180]. Example: `"51.5074,-0.1278"`.
@@ -17,7 +18,7 @@ use crate::Location;
 ///
 /// | Input pattern                          | Result                             |
 /// |----------------------------------------|------------------------------------|
-/// | Alphabetic only (e.g. `"London"`)      | `Location::City` (empty API key)   |
+/// | Letters, spaces, `-`, `'` (e.g. `"O'Reilly"`) | `Location::City` (empty API key)   |
 /// | `"lat,lon"` (e.g. `"51.5,-0.12"`)      | `Location::Coordinates`            |
 /// | Anything else                          | `Err(“…”)`                         |
 ///
@@ -31,7 +32,7 @@ pub fn parse_location(input: &str) -> Result<Location, String> {
         return Err("empty location string".to_string());
     }
 
-    // Case 1: all alphabetic (ASCII letters only) → city name
+    // Case 1: letters, spaces, hyphens, apostrophes → city name
     if is_alphabetic(trimmed) {
         return Ok(Location::City {
             name: trimmed.to_string(),
@@ -50,15 +51,17 @@ pub fn parse_location(input: &str) -> Result<Location, String> {
     // Case 3: everything else is invalid
     Err(format!(
         "unrecognised location format: '{}'. Expected either a city name \
-         (letters only) or coordinates in 'latitude,longitude' format",
+         (letters, spaces, hyphens, apostrophes) or coordinates in 'latitude,longitude' format",
         trimmed
     ))
 }
 
-/// Returns `true` when every character in `s` is an ASCII alphabetic letter
-/// (a–z or A–Z).
+/// Returns `true` when every character in `s` is a Unicode alphabetic letter,
+/// space, hyphen (`-`), or apostrophe (`'`), and `s` contains at least one
+/// letter.
 fn is_alphabetic(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic())
+    s.chars().any(|c| c.is_alphabetic())
+        && s.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'')
 }
 
 /// Parse a `"latitude,longitude"` string into `(f32, f32)`.
@@ -122,23 +125,46 @@ mod tests {
     }
 
     #[test]
-    fn alphabetic_rejects_spaces() {
-        assert!(!is_alphabetic("New York"));
-        assert!(!is_alphabetic("Los Angeles"));
+    fn alphabetic_with_spaces() {
+        assert!(is_alphabetic("New York"));
+        assert!(is_alphabetic("Los Angeles"));
+        assert!(is_alphabetic("Kuala Lumpur"));
+        assert!(is_alphabetic("Sauðárkrókur"));
     }
 
     #[test]
-    fn alphabetic_rejects_punctuation() {
-        assert!(!is_alphabetic("St.-Germain"));
-        assert!(!is_alphabetic("O'Reilly"));
+    fn alphabetic_rejects_only_spaces() {
+        assert!(!is_alphabetic("   "));
+        assert!(!is_alphabetic(" "));
     }
 
     #[test]
-    fn alphabetic_rejects_unicode_letters() {
-        // Only ASCII letters count; accented / Cyrillic / etc. are rejected.
-        assert!(!is_alphabetic("München"));
-        assert!(!is_alphabetic("Москва"));
-        assert!(!is_alphabetic("Wałbrzych"));
+    fn alphabetic_with_hyphens_and_apostrophes() {
+        assert!(is_alphabetic("O'Reilly"));
+        assert!(is_alphabetic("Côte-d'Or"));
+        assert!(is_alphabetic("N'Djamena"));
+        assert!(is_alphabetic("Wilkes-Barre"));
+    }
+
+    #[test]
+    fn alphabetic_rejects_other_punctuation() {
+        assert!(!is_alphabetic("City!"));
+        assert!(!is_alphabetic("City?"));
+        assert!(!is_alphabetic("City."));
+        assert!(!is_alphabetic("12.3"));
+    }
+
+    #[test]
+    fn alphabetic_with_accents() {
+        assert!(is_alphabetic("Kraków"));
+        assert!(is_alphabetic("München"));
+        assert!(is_alphabetic("Wałbrzych"));
+        assert!(is_alphabetic("Québec"));
+    }
+
+    #[test]
+    fn alphabetic_cyrillic() {
+        assert!(is_alphabetic("Москва"));
     }
 
     // ── parse_coordinates ──────────────────────────────────────────────
@@ -199,6 +225,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_city_name_accented() {
+        let loc = parse_location("Kraków").unwrap();
+        match loc {
+            Location::City { name, .. } => assert_eq!(name, "Kraków"),
+            _ => panic!("expected City variant"),
+        }
+    }
+
+    #[test]
     fn parse_coordinates_via_parse_location() {
         let loc = parse_location("48.8566,2.3522").unwrap();
         match loc {
@@ -237,9 +272,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_spaces_in_name() {
-        // "New York" contains spaces — not alphabetic-only and not coords
-        assert!(parse_location("New York").is_err());
+    fn parse_city_name_with_spaces() {
+        let loc = parse_location("New York").unwrap();
+        match loc {
+            Location::City { name, .. } => assert_eq!(name, "New York"),
+            _ => panic!("expected City variant"),
+        }
+    }
+
+    #[test]
+    fn parse_city_name_with_punctuation() {
+        let loc = parse_location("O'Reilly").unwrap();
+        match loc {
+            Location::City { name, .. } => assert_eq!(name, "O'Reilly"),
+            _ => panic!("expected City variant"),
+        }
+        let loc = parse_location("Côte-d'Or").unwrap();
+        match loc {
+            Location::City { name, .. } => assert_eq!(name, "Côte-d'Or"),
+            _ => panic!("expected City variant"),
+        }
     }
 
     #[test]

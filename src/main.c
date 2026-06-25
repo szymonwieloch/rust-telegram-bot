@@ -40,8 +40,9 @@ static void on_signal(int sig) {
 static void handle_start(const telebot_message_t *msg) {
     const char *reply_text =
         "🌤️  Hello! Send me a location like:\n\n"
-        "    /weather 51.5074,-0.1278\n"
-        "    /weather London\n\n"
+        "    51.5074,-0.1278\n"
+        "    London\n"
+        "    New York\n\n"
         "and I'll tell you the current weather there.\n";
 
     telebot_send_message(g_handle, msg->chat->id, reply_text,
@@ -85,10 +86,8 @@ static void on_message(const telebot_message_t *msg) {
 
     if (strcmp(text, "/start") == 0) {
         handle_start(msg);
-    } else if (strncmp(text, "/weather ", 9) == 0) {
-        handle_weather(msg, text + 9);
-    } else if (strcmp(text, "/weather") == 0) {
-        handle_weather(msg, NULL);
+    } else {
+        handle_weather(msg, text);
     }
 }
 
@@ -114,6 +113,10 @@ static void polling_loop(void) {
 
         ret = telebot_get_updates(g_handle, offset, limit, timeout,
                                   allowed, 1, &updates, &count);
+        /* OPERATION_FAILED means an empty result — no new messages. */
+        if (ret == TELEBOT_ERROR_OPERATION_FAILED) {
+            continue;
+        }
         if (ret != TELEBOT_ERROR_NONE) {
             fprintf(stderr, "telebot_get_updates failed: %d\n", ret);
             apr_sleep(1000000); /* 1 second */
