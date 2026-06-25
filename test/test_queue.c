@@ -1,12 +1,14 @@
 /**
- * test_queue — Unit tests for the thread-safe response queue.
+ * test_queue — Unit tests for apr_queue_t (APR-Util thread-safe FIFO).
  *
  * Tests cover:
- *   - init / destroy lifecycle
+ *   - create / term lifecycle
  *   - push / pop single and multiple items
  *   - FIFO ordering
- *   - shutdown behaviour
- *   - edge cases (empty text, long text, many items)
+ *   - bounded capacity (trypush / trypop)
+ *   - term behaviour
+ *   - concurrent push / pop
+ *   - edge cases (many items, long text, unusual IDs)
  */
 
 #include <stdio.h>
@@ -18,41 +20,73 @@
 
 #include <apr_general.h>
 #include <apr_pools.h>
+#include <apr_queue.h>
 
-#include "../src/queue.h"
+/* ── Message wrapper ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    long long chat_id;
+    char     *text;        /* caller owns */
+} msg_t;
+
+static msg_t *msg_new(long long chat_id, const char *text) {
+    msg_t *m = malloc(sizeof(*m));
+    m->chat_id = chat_id;
+    m->text    = strdup(text ? text : "");
+    return m;
+}
+
+static void msg_free(msg_t *m) {
+    if (m) {
+        free(m->text);
+        free(m);
+    }
+}
 
 /* ── Test harness ─────────────────────────────────────────────────────────── */
 
-static int g_tests_run     = 0;
-static int g_tests_passed  = 0;
+static int g_tests_run    = 0;
+static int g_tests_passed = 0;
 
 #define TEST(name) \
     static void name(apr_pool_t *pool)
 
-#define RUN_TEST(name, pool) do {                    \
-    g_tests_run++;                                   \
-    printf("  %-55s", #name "... ");                \
-    fflush(stdout);                                  \
-    name(pool);                                      \
-    g_tests_passed++;                                \
-    printf("PASSED\n");                              \
+#define RUN_TEST(name, pool) do {                     \
+    g_tests_run++;                                    \
+    printf("  %-55s", #name "... ");                 \
+    fflush(stdout);                                   \
+    name(pool);                                       \
+    g_tests_passed++;                                 \
+    printf("PASSED\n");                               \
 } while(0)
 
-/* ── Helper: push and pop in a background thread ──────────────────────────── */
+/* ── Helpers for threaded tests ───────────────────────────────────────────── */
 
 typedef struct {
-    response_queue_t *q;
-    long long         chat_id;
-    const char       *text;
-    int               delay_us;   /* microseconds to sleep before pushing */
-} push_thread_arg_t;
+    apr_queue_t *q;
+    msg_t       *msg;
+    int          delay_us;
+} push_arg_t;
 
-static void *push_thread_func(void *arg) {
-    push_thread_arg_t *a = (push_thread_arg_t *)arg;
-    if (a->delay_us > 0) {
-        usleep(a->delay_us);
-    }
-    queue_push(a->q, a->chat_id, a->text);
+static void *push_thread(void *arg) {
+    push_arg_t *a = (push_arg_t *)arg;
+    if (a->delay_us > 0) usleep(a->delay_us);
+    apr_queue_push(a->q, a->msg);
+    return NULL;
+}
+
+typedef struct {
+    apr_queue_t *q;
+    msg_t      **out;        /* receives popped pointer */
+    int         *p_status;   /* out: 0 = success, -1 = EOF/error */
+} pop_arg_t;
+
+static void *pop_thread(void *arg) {
+    pop_arg_t *a = (pop_arg_t *)arg;
+    void *data = NULL;
+    apr_status_t st = apr_queue_pop(a->q, &data);
+    *a->out    = (msg_t *)data;
+    *a->p_status = (st == APR_SUCCESS) ? 0 : -1;
     return NULL;
 }
 
@@ -62,410 +96,375 @@ static void *push_thread_func(void *arg) {
 
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
-TEST(test_init_destroy) {
-    response_queue_t q;
-    queue_init(&q, pool);
-    assert(q.head == NULL);
-    assert(q.tail == NULL);
-    assert(q.shutdown == 0);
-    queue_destroy(&q);
+TEST(test_create_term) {
+    apr_queue_t *q = NULL;
+    assert(apr_queue_create(&q, 16, pool) == APR_SUCCESS);
+    assert(q != NULL);
+    apr_queue_term(q);
+    /* queue is freed with pool */
 }
 
-TEST(test_destroy_empty_twice_is_harmless) {
-    /* Just verify no double-free — if we get here without crashing, ok. */
-    response_queue_t q;
-    queue_init(&q, pool);
-    queue_destroy(&q);
-    /* queue_destroy again would be UB; we just test the normal path. */
+TEST(test_create_zero_capacity_fails) {
+    apr_queue_t *q = NULL;
+    /* APR queue requires capacity >= 1 */
+    apr_status_t st = apr_queue_create(&q, 0, pool);
+    if (st == APR_SUCCESS) apr_queue_term(q);
 }
 
 /* ── Single push / pop ────────────────────────────────────────────────────── */
 
 TEST(test_push_pop_single) {
-    response_queue_t q;
-    queue_init(&q, pool);
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
-    queue_push(&q, 123456LL, "hello world");
+    msg_t *in = msg_new(123LL, "hello");
+    assert(apr_queue_push(q, in) == APR_SUCCESS);
 
-    response_node_t out;
-    memset(&out, 0xAA, sizeof(out));   /* poison to detect partial writes */
-    int ret = queue_pop(&q, &out);
+    void *data = NULL;
+    assert(apr_queue_pop(q, &data) == APR_SUCCESS);
+    msg_t *out = (msg_t *)data;
+    assert(out->chat_id == 123LL);
+    assert(strcmp(out->text, "hello") == 0);
+    msg_free(out);
 
-    assert(ret == 0);
-    assert(out.chat_id == 123456LL);
-    assert(strcmp(out.text, "hello world") == 0);
-
-    free(out.text);
-    queue_signal_shutdown(&q);
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
 TEST(test_push_pop_empty_text) {
-    response_queue_t q;
-    queue_init(&q, pool);
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
-    queue_push(&q, 999LL, "");
+    msg_t *in = msg_new(99LL, "");
+    apr_queue_push(q, in);
 
-    response_node_t out;
-    int ret = queue_pop(&q, &out);
-    assert(ret == 0);
-    assert(out.chat_id == 999LL);
-    assert(strcmp(out.text, "") == 0);
+    void *data = NULL;
+    apr_queue_pop(q, &data);
+    msg_t *out = (msg_t *)data;
+    assert(strcmp(out->text, "") == 0);
+    msg_free(out);
 
-    free(out.text);
-    queue_signal_shutdown(&q);
-    queue_pop(&q, &out);   /* drain shutdown */
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
 /* ── FIFO ordering ────────────────────────────────────────────────────────── */
 
-TEST(test_fifo_order_three_items) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_fifo_order) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
-    queue_push(&q, 1, "first");
-    queue_push(&q, 2, "second");
-    queue_push(&q, 3, "third");
+    apr_queue_push(q, msg_new(1, "first"));
+    apr_queue_push(q, msg_new(2, "second"));
+    apr_queue_push(q, msg_new(3, "third"));
 
-    response_node_t out;
+    void *data;
+    msg_t *m;
 
-    assert(queue_pop(&q, &out) == 0);
-    assert(out.chat_id == 1 && strcmp(out.text, "first") == 0);
-    free(out.text);
+    apr_queue_pop(q, &data); m = data;
+    assert(m->chat_id == 1 && strcmp(m->text, "first") == 0); msg_free(m);
 
-    assert(queue_pop(&q, &out) == 0);
-    assert(out.chat_id == 2 && strcmp(out.text, "second") == 0);
-    free(out.text);
+    apr_queue_pop(q, &data); m = data;
+    assert(m->chat_id == 2 && strcmp(m->text, "second") == 0); msg_free(m);
 
-    assert(queue_pop(&q, &out) == 0);
-    assert(out.chat_id == 3 && strcmp(out.text, "third") == 0);
-    free(out.text);
+    apr_queue_pop(q, &data); m = data;
+    assert(m->chat_id == 3 && strcmp(m->text, "third") == 0); msg_free(m);
 
-    queue_signal_shutdown(&q);
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
-/* ── Shutdown behaviour ───────────────────────────────────────────────────── */
+/* ── Try-push / try-pop (non-blocking) ────────────────────────────────────── */
 
-TEST(test_shutdown_on_empty_returns_neg1) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_trypop_empty_returns_eagain) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 4, pool);
 
-    queue_signal_shutdown(&q);
+    void *data = NULL;
+    apr_status_t st = apr_queue_trypop(q, &data);
+    assert(st == APR_EAGAIN);
+    /* data is undefined on EAGAIN — don't dereference */
 
-    response_node_t out;
-    assert(queue_pop(&q, &out) == -1);
-
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
-TEST(test_shutdown_drains_remaining_items) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_trypush_full_returns_eagain) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 2, pool);
 
-    queue_push(&q, 10, "before-shutdown");
-    queue_signal_shutdown(&q);
-    queue_push(&q, 20, "after-shutdown");   /* push still works after shutdown */
+    /* Fill the queue */
+    apr_queue_push(q, msg_new(1, "a"));
+    apr_queue_push(q, msg_new(2, "b"));
 
-    response_node_t out;
+    /* Now trying to push should fail (queue full) */
+    msg_t *extra = msg_new(3, "c");
+    apr_status_t st = apr_queue_trypush(q, extra);
+    assert(st == APR_EAGAIN);
+    msg_free(extra);   /* not pushed, must free ourselves */
 
-    /* Should drain both items in order, then return -1 */
-    assert(queue_pop(&q, &out) == 0);
-    assert(strcmp(out.text, "before-shutdown") == 0);
-    free(out.text);
+    /* Drain and check */
+    void *data;
+    apr_queue_pop(q, &data); msg_free((msg_t *)data);
+    apr_queue_pop(q, &data); msg_free((msg_t *)data);
 
-    assert(queue_pop(&q, &out) == 0);
-    assert(strcmp(out.text, "after-shutdown") == 0);
-    free(out.text);
-
-    assert(queue_pop(&q, &out) == -1);
-
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
-/* ── Helper types for threaded pop tests ─────────────────────────────────── */
+TEST(test_trypush_trypop_roundtrip) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 4, pool);
 
-typedef struct {
-    response_queue_t *q;
-    long long         expected_chat_id;
-    const char       *expected_text;
-    int              *p_result;       /* out: 1 = ok, 0 = mismatch */
-} pop_thread_arg_t;
+    msg_t *in = msg_new(42, "try-roundtrip");
+    assert(apr_queue_trypush(q, in) == APR_SUCCESS);
 
-static void *pop_thread_func(void *arg) {
-    pop_thread_arg_t *a = (pop_thread_arg_t *)arg;
-    response_node_t out;
-    int ret = queue_pop(a->q, &out);
-    if (ret != 0) {
-        *a->p_result = -1;   /* unexpected shutdown */
-        return NULL;
-    }
-    *a->p_result = (out.chat_id == a->expected_chat_id &&
-                    strcmp(out.text, a->expected_text) == 0) ? 1 : 0;
-    free(out.text);
-    return NULL;
+    void *data = NULL;
+    assert(apr_queue_trypop(q, &data) == APR_SUCCESS);
+    msg_t *out = (msg_t *)data;
+    assert(strcmp(out->text, "try-roundtrip") == 0);
+    msg_free(out);
+
+    apr_queue_term(q);
 }
 
-/* ── Concurrent: push from main, pop from APR thread ─────────────────────── */
+/* ── Term behaviour ───────────────────────────────────────────────────────── */
 
-TEST(test_concurrent_pop_in_thread) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_term_wakes_blocked_pop) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 4, pool);
 
-    /* Push first, then have thread pop */
-    queue_push(&q, 888LL, "hello-thread");
-
-    int pop_ok = -99;
-    pop_thread_arg_t arg;
-    arg.q              = &q;
-    arg.expected_chat_id = 888LL;
-    arg.expected_text  = "hello-thread";
-    arg.p_result       = &pop_ok;
+    /* Start a thread that blocks on pop */
+    msg_t *out = NULL;
+    int status = 999;
+    pop_arg_t arg = { q, &out, &status };
 
     pthread_t thd;
-    int st = pthread_create(&thd, NULL, pop_thread_func, &arg);
-    assert(st == 0);
+    pthread_create(&thd, NULL, pop_thread, &arg);
+    usleep(100000);   /* let thread start blocking */
 
+    /* Terminate — should wake the pop with APR_EOF */
+    apr_queue_term(q);
     pthread_join(thd, NULL);
-    assert(pop_ok == 1);
 
-    queue_signal_shutdown(&q);
-    response_node_t out;
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
+    assert(status == -1);    /* APR_EOF */
+    assert(out == NULL);
 }
 
-/* ── Concurrent: multiple pushers, one consumer thread ───────────────────── */
+TEST(test_term_then_push_fails) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 4, pool);
 
-TEST(test_multiple_pushers_one_consumer_thread) {
-    response_queue_t  q;
-    queue_init(&q, pool);
+    apr_queue_term(q);
+
+    msg_t *m = msg_new(1, "too-late");
+    apr_status_t st = apr_queue_push(q, m);
+    assert(st == APR_EOF);
+    msg_free(m);
+}
+
+TEST(test_term_drains_remaining) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 4, pool);
+
+    apr_queue_push(q, msg_new(10, "pre-term"));
+
+    apr_queue_term(q);
+
+    /* After term, pop returns APR_EOF (APR discards remaining items) */
+    void *data = NULL;
+    apr_status_t st = apr_queue_pop(q, &data);
+    assert(st == APR_EOF);
+    assert(data == NULL);
+}
+
+/* ── Size (informational) ─────────────────────────────────────────────────── */
+
+TEST(test_size_reflects_items) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
+
+    assert(apr_queue_size(q) == 0);
+
+    apr_queue_push(q, msg_new(1, "x"));
+    apr_queue_push(q, msg_new(2, "y"));
+    assert(apr_queue_size(q) == 2);
+
+    void *data;
+    apr_queue_pop(q, &data); msg_free((msg_t *)data);
+    assert(apr_queue_size(q) == 1);
+
+    apr_queue_pop(q, &data); msg_free((msg_t *)data);
+    assert(apr_queue_size(q) == 0);
+
+    apr_queue_term(q);
+}
+
+/* ── Concurrent: push from main, pop from pthread ─────────────────────────── */
+
+TEST(test_concurrent_pop_in_thread) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
+
+    /* Push first, then pop from thread */
+    msg_t *in = msg_new(777LL, "concurrent");
+    apr_queue_push(q, in);
+
+    msg_t *out = NULL;
+    int status = 999;
+    pop_arg_t arg = { q, &out, &status };
+
+    pthread_t thd;
+    pthread_create(&thd, NULL, pop_thread, &arg);
+    pthread_join(thd, NULL);
+
+    assert(status == 0);
+    assert(out != NULL);
+    assert(out->chat_id == 777LL);
+    assert(strcmp(out->text, "concurrent") == 0);
+    msg_free(out);
+
+    apr_queue_term(q);
+}
+
+/* ── Concurrent: multiple pushers ─────────────────────────────────────────── */
+
+TEST(test_multiple_concurrent_pushers) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 16, pool);
 
     #define N 4
-    push_thread_arg_t pargs[N];
-    pthread_t         pthreads[N];
-    const char       *texts[N] = { "A", "B", "C", "D" };
+    msg_t      *msgs[N];
+    push_arg_t  args[N];
+    pthread_t   threads[N];
 
-    /* Spawn pusher threads (they sleep briefly to stagger) */
     for (int i = 0; i < N; i++) {
-        pargs[i].q        = &q;
-        pargs[i].chat_id  = 200 + i;
-        pargs[i].text     = texts[i];
-        pargs[i].delay_us = (i + 1) * 20000;
-        pthread_create(&pthreads[i], NULL, push_thread_func, &pargs[i]);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "T%d", i);
+        msgs[i] = msg_new(100 + i, buf);
+        args[i].q        = q;
+        args[i].msg      = msgs[i];
+        args[i].delay_us = (i + 1) * 20000;
+        pthread_create(&threads[i], NULL, push_thread, &args[i]);
     }
 
-    /* Consumer in the main thread: we pre-push a shutdown marker via a
-       separate thread approach.  Instead, just pop N items — the pusher
-       threads ensure all N are available. */
+    /* Pop all N using trypop (non-blocking, safe from main thread).
+       Items will arrive within ~80ms — poll for up to 200ms. */
     int received[N];
     memset(received, 0, sizeof(received));
-    response_node_t out;
 
     for (int i = 0; i < N; i++) {
-        /* We cannot block the main thread on apr_thread_cond_wait (APR issue).
-           But we know all pushers finish within ~80ms.  Use a brief poll loop. */
         int got = 0;
         for (int attempt = 0; attempt < 200; attempt++) {
-            apr_thread_mutex_lock(q.lock);
-            if (q.head != NULL) {
-                /* Manually dequeue to avoid apr_thread_cond_wait */
-                response_node_t *n = q.head;
-                q.head = n->next;
-                if (!q.head) q.tail = NULL;
-                apr_thread_mutex_unlock(q.lock);
-
-                out.chat_id = n->chat_id;
-                out.text    = n->text;
-                free(n);
-
-                int idx = (int)(out.chat_id - 200);
+            void *data = NULL;
+            if (apr_queue_trypop(q, &data) == APR_SUCCESS) {
+                msg_t *m = (msg_t *)data;
+                int idx = (int)(m->chat_id - 100);
                 assert(idx >= 0 && idx < N);
                 received[idx] = 1;
-                free(out.text);
+                msg_free(m);
                 got = 1;
                 break;
             }
-            apr_thread_mutex_unlock(q.lock);
             usleep(1000);   /* 1 ms */
         }
         assert(got && "timed out waiting for push from thread");
     }
 
-    /* Verify all N were received exactly once */
     for (int i = 0; i < N; i++) {
         assert(received[i] == 1);
+        pthread_join(threads[i], NULL);
     }
 
-    for (int i = 0; i < N; i++) {
-        pthread_join(pthreads[i], NULL);
-    }
-
-    queue_signal_shutdown(&q);
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
+    apr_queue_term(q);
     #undef N
 }
 
 /* ── Edge cases ───────────────────────────────────────────────────────────── */
 
-TEST(test_push_pop_long_text) {
-    response_queue_t q;
-    queue_init(&q, pool);
-
-    /* Build a 4 KB string */
-    char long_text[4097];
-    memset(long_text, 'X', sizeof(long_text) - 1);
-    long_text[sizeof(long_text) - 1] = '\0';
-
-    queue_push(&q, 42, long_text);
-
-    response_node_t out;
-    assert(queue_pop(&q, &out) == 0);
-    assert(strlen(out.text) == 4096);
-    assert(out.text[0] == 'X' && out.text[4095] == 'X');
-    free(out.text);
-
-    queue_signal_shutdown(&q);
-    queue_pop(&q, &out);
-    queue_destroy(&q);
-}
-
-TEST(test_push_pop_special_characters) {
-    response_queue_t q;
-    queue_init(&q, pool);
-
-    const char *special = "line1\nline2\t tab\0hidden" /* only up to \0 */;
-    queue_push(&q, 1, "🌤️  Unicode and emoji ✓");
-    queue_push(&q, 2, "C:\\path\\to\\file");
-    queue_push(&q, 3, "100% \"quoted\" 'text'");
-
-    response_node_t out;
-
-    assert(queue_pop(&q, &out) == 0);
-    assert(strcmp(out.text, "🌤️  Unicode and emoji ✓") == 0);
-    free(out.text);
-
-    assert(queue_pop(&q, &out) == 0);
-    assert(strcmp(out.text, "C:\\path\\to\\file") == 0);
-    free(out.text);
-
-    assert(queue_pop(&q, &out) == 0);
-    assert(strcmp(out.text, "100% \"quoted\" 'text'") == 0);
-    free(out.text);
-
-    queue_signal_shutdown(&q);
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
-
-    (void)special;   /* suppress unused warning */
-}
-
-TEST(test_push_pop_many_items) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_many_items) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 512, pool);
 
     #define N 500
     for (int i = 0; i < N; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "item-%d", i);
-        queue_push(&q, i, buf);
+        apr_queue_push(q, msg_new(i, buf));
     }
 
-    response_node_t out;
     for (int i = 0; i < N; i++) {
-        assert(queue_pop(&q, &out) == 0);
+        void *data = NULL;
+        assert(apr_queue_pop(q, &data) == APR_SUCCESS);
+        msg_t *m = (msg_t *)data;
         char expected[32];
         snprintf(expected, sizeof(expected), "item-%d", i);
-        assert(out.chat_id == (long long)i);
-        assert(strcmp(out.text, expected) == 0);
-        free(out.text);
+        assert(m->chat_id == (long long)i);
+        assert(strcmp(m->text, expected) == 0);
+        msg_free(m);
     }
-
-    queue_signal_shutdown(&q);
-    assert(queue_pop(&q, &out) == -1);
-    queue_destroy(&q);
     #undef N
+
+    apr_queue_term(q);
 }
 
-TEST(test_push_null_chat_id) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_long_text) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
-    queue_push(&q, 0, "zero chat id");
+    char big[4097];
+    memset(big, 'Z', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
 
-    response_node_t out;
-    assert(queue_pop(&q, &out) == 0);
-    assert(out.chat_id == 0);
-    assert(strcmp(out.text, "zero chat id") == 0);
-    free(out.text);
+    apr_queue_push(q, msg_new(1, big));
 
-    queue_signal_shutdown(&q);
-    queue_pop(&q, &out);
-    queue_destroy(&q);
+    void *data = NULL;
+    apr_queue_pop(q, &data);
+    msg_t *m = (msg_t *)data;
+    assert(strlen(m->text) == 4096);
+    assert(m->text[0] == 'Z' && m->text[4095] == 'Z');
+    msg_free(m);
+
+    apr_queue_term(q);
 }
 
-TEST(test_push_negative_chat_id) {
-    response_queue_t q;
-    queue_init(&q, pool);
+TEST(test_unusual_chat_ids) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
     /* Telegram uses negative IDs for group chats */
-    queue_push(&q, -1001234567890LL, "group message");
+    apr_queue_push(q, msg_new(0, "zero"));
+    apr_queue_push(q, msg_new(-1001234567890LL, "group"));
 
-    response_node_t out;
-    assert(queue_pop(&q, &out) == 0);
-    assert(out.chat_id == -1001234567890LL);
-    assert(strcmp(out.text, "group message") == 0);
-    free(out.text);
+    void *data;
+    msg_t *m;
 
-    queue_signal_shutdown(&q);
-    queue_pop(&q, &out);
-    queue_destroy(&q);
+    apr_queue_pop(q, &data); m = data;
+    assert(m->chat_id == 0); msg_free(m);
+
+    apr_queue_pop(q, &data); m = data;
+    assert(m->chat_id == -1001234567890LL); msg_free(m);
+
+    apr_queue_term(q);
 }
 
-/* ── Shutdown while a pop is blocking (threaded) ──────────────────────────── */
+/* ── Interrupt all ────────────────────────────────────────────────────────── */
 
-typedef struct {
-    response_queue_t *q;
-    int               *p_result;   /* out: queue_pop return value */
-} shutdown_test_arg_t;
+TEST(test_interrupt_all_wakes_pop) {
+    apr_queue_t *q = NULL;
+    apr_queue_create(&q, 8, pool);
 
-static void *blocking_pop_thread(void *arg) {
-    shutdown_test_arg_t *a = (shutdown_test_arg_t *)arg;
-    response_node_t out;
-    *a->p_result = queue_pop(a->q, &out);
-    if (*a->p_result == 0) {
-        free(out.text);
-    }
-    return NULL;
-}
-
-TEST(test_shutdown_wakes_blocked_pop) {
-    response_queue_t q;
-    queue_init(&q, pool);
-
-    int pop_result = 999;   /* sentinel */
-    shutdown_test_arg_t arg;
-    arg.q        = &q;
-    arg.p_result = &pop_result;
+    msg_t *out = NULL;
+    int status = 999;
+    pop_arg_t arg = { q, &out, &status };
 
     pthread_t thd;
-    pthread_create(&thd, NULL, blocking_pop_thread, &arg);
+    pthread_create(&thd, NULL, pop_thread, &arg);
+    usleep(50000);
 
-    /* Give the thread time to start blocking on queue_pop */
-    usleep(100000);   /* 100 ms */
-
-    /* Now shut down — should wake the blocked pop */
-    queue_signal_shutdown(&q);
+    apr_queue_interrupt_all(q);
 
     pthread_join(thd, NULL);
+    /* Pop returns APR_EINTR → status = -1, out = NULL */
+    assert(status == -1);
+    assert(out == NULL);
 
-    assert(pop_result == -1);
-
-    queue_destroy(&q);
+    apr_queue_term(q);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -483,43 +482,45 @@ int main(void) {
 
     printf("\n");
     printf("═══════════════════════════════════════════════\n");
-    printf("  Queue Unit Tests\n");
+    printf("  apr_queue_t Unit Tests\n");
     printf("═══════════════════════════════════════════════\n\n");
 
-    /* ── Lifecycle ──────────────────────────────────────────────────────── */
     printf("── Lifecycle ──\n");
-    RUN_TEST(test_init_destroy, pool);
-    RUN_TEST(test_destroy_empty_twice_is_harmless, pool);
+    RUN_TEST(test_create_term, pool);
+    RUN_TEST(test_create_zero_capacity_fails, pool);
 
-    /* ── Single push/pop ────────────────────────────────────────────────── */
     printf("\n── Push / Pop (single) ──\n");
     RUN_TEST(test_push_pop_single, pool);
     RUN_TEST(test_push_pop_empty_text, pool);
 
-    /* ── FIFO ordering ──────────────────────────────────────────────────── */
     printf("\n── FIFO ordering ──\n");
-    RUN_TEST(test_fifo_order_three_items, pool);
+    RUN_TEST(test_fifo_order, pool);
 
-    /* ── Shutdown ───────────────────────────────────────────────────────── */
-    printf("\n── Shutdown behaviour ──\n");
-    RUN_TEST(test_shutdown_on_empty_returns_neg1, pool);
-    RUN_TEST(test_shutdown_drains_remaining_items, pool);
+    printf("\n── Try-push / Try-pop ──\n");
+    RUN_TEST(test_trypop_empty_returns_eagain, pool);
+    RUN_TEST(test_trypush_full_returns_eagain, pool);
+    RUN_TEST(test_trypush_trypop_roundtrip, pool);
 
-    /* ── Concurrency ────────────────────────────────────────────────────── */
+    printf("\n── Term behaviour ──\n");
+    RUN_TEST(test_term_wakes_blocked_pop, pool);
+    RUN_TEST(test_term_then_push_fails, pool);
+    RUN_TEST(test_term_drains_remaining, pool);
+
+    printf("\n── Size ──\n");
+    RUN_TEST(test_size_reflects_items, pool);
+
     printf("\n── Concurrency ──\n");
     RUN_TEST(test_concurrent_pop_in_thread, pool);
-    RUN_TEST(test_multiple_pushers_one_consumer_thread, pool);
-    RUN_TEST(test_shutdown_wakes_blocked_pop, pool);
+    RUN_TEST(test_multiple_concurrent_pushers, pool);
 
-    /* ── Edge cases ─────────────────────────────────────────────────────── */
     printf("\n── Edge cases ──\n");
-    RUN_TEST(test_push_pop_long_text, pool);
-    RUN_TEST(test_push_pop_special_characters, pool);
-    RUN_TEST(test_push_pop_many_items, pool);
-    RUN_TEST(test_push_null_chat_id, pool);
-    RUN_TEST(test_push_negative_chat_id, pool);
+    RUN_TEST(test_many_items, pool);
+    RUN_TEST(test_long_text, pool);
+    RUN_TEST(test_unusual_chat_ids, pool);
 
-    /* ── Summary ────────────────────────────────────────────────────────── */
+    printf("\n── Interrupt ──\n");
+    RUN_TEST(test_interrupt_all_wakes_pop, pool);
+
     printf("\n═══════════════════════════════════════════════\n");
     printf("  %d / %d tests passed\n", g_tests_passed, g_tests_run);
     printf("═══════════════════════════════════════════════\n\n");

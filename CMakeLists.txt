@@ -15,6 +15,7 @@ find_package(PkgConfig REQUIRED)
 
 # APR (Apache Portable Runtime)
 pkg_check_modules(APR REQUIRED apr-1)
+pkg_check_modules(APRUTIL REQUIRED apr-util-1)
 
 # telebot (Telegram Bot API library from GitHub)
 include(FetchContent)
@@ -56,17 +57,18 @@ corrosion_import_crate(
 add_executable(${PROJECT_NAME}
     src/main.c
     src/responder.c
-    src/queue.c
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     ${APR_INCLUDE_DIRS}
+    ${APRUTIL_INCLUDE_DIRS}
     "${telebot_SOURCE_DIR}/include"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${APR_LIBRARIES}
+    ${APRUTIL_LIBRARIES}
     telebot
     meteo
     pthread dl m
@@ -88,16 +90,16 @@ enable_testing()
 
 add_executable(test_queue
     test/test_queue.c
-    src/queue.c
 )
 
 target_include_directories(test_queue PRIVATE
-    "${CMAKE_SOURCE_DIR}/src"
     ${APR_INCLUDE_DIRS}
+    ${APRUTIL_INCLUDE_DIRS}
 )
 
 target_link_libraries(test_queue PRIVATE
     ${APR_LIBRARIES}
+    ${APRUTIL_LIBRARIES}
     pthread
 )
 
