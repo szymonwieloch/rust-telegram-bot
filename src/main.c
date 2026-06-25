@@ -55,7 +55,7 @@ static void handle_start(telebot_handler_t handle, const telebot_message_t *msg)
 
 /* ── Weather handler (non-blocking) ───────────────────────────────────────── */
 
-static void handle_weather(telebot_handler_t handle, MeteoContext *meteo,
+static void handle_weather(telebot_handler_t handle, const MeteoContext *meteo,
                            const telebot_message_t *msg, const char *arg)
 {
     if (utils_is_blank(arg)) {
@@ -80,7 +80,7 @@ static void handle_weather(telebot_handler_t handle, MeteoContext *meteo,
 
 /* ── Message dispatcher ───────────────────────────────────────────────────── */
 
-static void on_message(telebot_handler_t handle, MeteoContext *meteo,
+static void on_message(telebot_handler_t handle, const MeteoContext *meteo,
                        const telebot_message_t *msg)
 {
     if (!msg || !msg->text)
@@ -98,7 +98,7 @@ static void on_message(telebot_handler_t handle, MeteoContext *meteo,
 /* ── Polling loop ─────────────────────────────────────────────────────────── */
 
 static void polling_loop(apr_pool_t *pool, telebot_handler_t handle,
-                         MeteoContext *meteo)
+                         const MeteoContext *meteo)
 {
     int offset = 0, limit = 10, timeout = 1;
     telebot_error_e ret;
