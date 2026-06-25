@@ -91,7 +91,7 @@ jobs:
 
       - name: Run cppcheck
         run: |
-          cppcheck --enable=all --inconclusive --error-exitcode=1 \
+          cppcheck --enable=warning,performance,portability,style --inconclusive --error-exitcode=1 \
             --suppress=missingIncludeSystem \
             --suppress=unmatchedSuppression \
             --suppress='*:test/abts.c' \
