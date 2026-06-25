@@ -16,7 +16,7 @@
 #include <apr_general.h>
 #include <apr_getopt.h>
 #include <apr_pools.h>
-#include <apr_strings.h>
+#include <apr_signal.h>
 
 #include <telebot.h>
 
@@ -214,13 +214,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Make a mutable copy — telebot_create expects char* */
-    char *token_mut = apr_pstrdup(g_pool, token);
+    /* ── Copy token for telebot_create (library copies it internally via
+       strdup, so we can free our copy immediately after the call). ────── */
+    char *token_mut = strdup(token);
+    if (!token_mut) {
+        fprintf(stderr, "Failed to allocate token copy\n");
+        apr_pool_destroy(g_pool);
+        return 1;
+    }
 
     /* ── Initialize weather library (geocoding + async runtime) ──────────── */
     g_meteo = meteo_init(geokey);
     if (!g_meteo) {
         fprintf(stderr, "Failed to initialize weather library\n");
+        free(token_mut);
         apr_pool_destroy(g_pool);
         return 1;
     }
@@ -228,9 +235,11 @@ int main(int argc, char **argv)
     /* ── Initialize telebot ──────────────────────────────────────────────── */
     if (telebot_create(&g_handle, token_mut) != TELEBOT_ERROR_NONE) {
         fprintf(stderr, "Failed to create telebot handler\n");
+        free(token_mut);
         apr_pool_destroy(g_pool);
         return 1;
     }
+    free(token_mut); /* library copied it — our copy no longer needed */
 
     /* ── Start the response subsystem (queue + sender thread) ───────────── */
     {
@@ -246,9 +255,9 @@ int main(int argc, char **argv)
         }
     }
 
-    /* ── Setup signal handling ───────────────────────────────────────────── */
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
+    /* ── Setup signal handling (APR wrapper for portability) ─────────────── */
+    apr_signal(SIGINT, on_signal);
+    apr_signal(SIGTERM, on_signal);
 
     /* ── Run the bot ─────────────────────────────────────────────────────── */
     polling_loop();
