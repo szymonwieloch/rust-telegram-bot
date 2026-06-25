@@ -22,6 +22,7 @@
 
 #include "meteo.h"
 #include "responder.h"
+#include "utils.h"
 
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 
@@ -54,7 +55,7 @@ static void handle_start(const telebot_message_t *msg) {
 /* ── Weather handler (non-blocking) ───────────────────────────────────────── */
 
 static void handle_weather(const telebot_message_t *msg, const char *arg) {
-    if (!arg || strlen(arg) == 0) {
+    if (utils_is_blank(arg)) {
         telebot_send_message(g_handle, msg->chat->id,
                              "⚠️  Usage: send coordinates like 51.5074,-0.1278"
                              " or a city name like London",
